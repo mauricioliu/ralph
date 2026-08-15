@@ -76,6 +76,10 @@ _Avoid_: "base branch", "destination branch", "merge target"
 A pluggable implementation that builds commands and parses output for a specific **agent**, injected into `run()` via the `agent` option.
 _Avoid_: "agent adapter", "agent driver"
 
+**Agent role**:
+The named function an **agent** performs within a scaffolded workflow -- planner, implementer, reviewer, or merger. Orthogonal to the **agent provider**; the same provider may serve different roles.
+_Avoid_: "job", "phase" (that's the workflow step), "task" (that's the work item)
+
 ### Execution
 
 **Agent invoker**:
