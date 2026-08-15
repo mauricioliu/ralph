@@ -1,6 +1,6 @@
 import { NodeFileSystem } from "@effect/platform-node";
 import { Effect } from "effect";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -12,6 +12,7 @@ import {
   listIssueTrackers,
   getIssueTracker,
   getSandboxProvider,
+  rewriteMainTs,
 } from "./InitService.js";
 import type {
   AgentEntry,
@@ -717,10 +718,10 @@ describe("InitService scaffold", () => {
       });
 
       const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
-      // Against the current claudeCode placeholder, the split survives
-      // untouched: the planner's model and the workers' model both remain.
-      expect(mainTs).toContain('claudeCode("claude-opus-4-7")');
-      expect(mainTs).toContain('claudeCode("claude-sonnet-4-6")');
+      // Against the pi placeholder, the split survives untouched: the
+      // planner's model and the workers' model both remain.
+      expect(mainTs).toContain('ralph.pi("openai-codex/gpt-5.6-terra:high")');
+      expect(mainTs).toContain('ralph.pi("zai-coding-cn/glm-5.3:high")');
     });
 
     it("pi without a model still rewrites the sandbox provider (orthogonal to the guard)", async () => {
@@ -738,8 +739,8 @@ describe("InitService scaffold", () => {
       );
       expect(mainTs).not.toContain("docker");
       // The agent/model rewrite is still skipped.
-      expect(mainTs).toContain('claudeCode("claude-opus-4-7")');
-      expect(mainTs).toContain('claudeCode("claude-sonnet-4-6")');
+      expect(mainTs).toContain('ralph.pi("openai-codex/gpt-5.6-terra:high")');
+      expect(mainTs).toContain('ralph.pi("zai-coding-cn/glm-5.3:high")');
     });
 
     it("pi with an explicit model collapses both roles to it", async () => {
@@ -754,8 +755,8 @@ describe("InitService scaffold", () => {
       // Every factory call rewrites to the single explicit model.
       expect(mainTs.match(/pi\("my-model"\)/g)).toHaveLength(3);
       expect(mainTs).not.toContain("claudeCode");
-      expect(mainTs).not.toContain("claude-opus-4-7");
-      expect(mainTs).not.toContain("claude-sonnet-4-6");
+      expect(mainTs).not.toContain("gpt-5.6-terra");
+      expect(mainTs).not.toContain("glm-5.3");
     });
 
     it("non-pi agent without a model still rewrites, using the agent's default (codex)", async () => {
@@ -769,6 +770,10 @@ describe("InitService scaffold", () => {
       const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
       expect(mainTs.match(/codex\("gpt-5\.4"\)/g)).toHaveLength(3);
       expect(mainTs).not.toContain("claudeCode");
+      // The pi placeholder is fully gone — no pi call sites survive.
+      expect(mainTs).not.toMatch(/\bpi\s*\(/);
+      expect(mainTs).not.toContain("gpt-5.6-terra");
+      expect(mainTs).not.toContain("glm-5.3");
     });
 
     it("claude-code without a model still collapses the split to its default", async () => {
@@ -782,6 +787,71 @@ describe("InitService scaffold", () => {
       const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
       expect(mainTs.match(/claudeCode\("claude-opus-4-7"\)/g)).toHaveLength(3);
       expect(mainTs).not.toContain("claude-sonnet-4-6");
+      expect(mainTs).not.toMatch(/\bpi\s*\(/);
+      expect(mainTs).not.toContain("glm-5.3");
+    });
+
+    it("non-pi agent rewrites the named import specifier to the selected factory (blank)", async () => {
+      const dir = await makeDir();
+      await runScaffold(dir, { agent: codexAgent, model: undefined });
+
+      const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
+      expect(mainTs).toContain(
+        'import { run, codex } from "@mauricioliu/ralph"',
+      );
+      expect(mainTs).toContain('agent: codex("gpt-5.4")');
+      expect(mainTs).not.toMatch(/\bpi\b/);
+    });
+  });
+
+  describe("rewriteMainTs multi-line call sites", () => {
+    it("rewrites the model in factory calls spanning multiple lines, preserving trailing options", async () => {
+      const dir = await makeDir();
+      const configDir = join(dir, ".ralph");
+      await mkdir(configDir);
+      await writeFile(
+        join(configDir, "main.mts"),
+        [
+          'import * as ralph from "@mauricioliu/ralph";',
+          "",
+          "await ralph.run({",
+          "  agent: ralph.pi(",
+          '    "openai-codex/gpt-5.6-terra:high",',
+          "    {",
+          "      captureSessions: false,",
+          "    },",
+          "  ),",
+          "  sandbox: ralph.docker(),",
+          "});",
+          "",
+          "const fallback = ralph.pi(",
+          '  "zai-coding-cn/glm-5.3:high"',
+          ");",
+          "",
+        ].join("\n"),
+      );
+
+      await Effect.runPromise(
+        rewriteMainTs(
+          configDir,
+          codexAgent,
+          "gpt-5.4",
+          getSandboxProvider("docker")!,
+          "main.mts",
+        ).pipe(Effect.provide(NodeFileSystem.layer)),
+      );
+
+      const mainTs = await readFile(join(configDir, "main.mts"), "utf-8");
+      // Both call sites — one with the model on its own line and trailing
+      // options, one bare multi-line — collapse to the selected model.
+      expect(mainTs.match(/codex\(\s*"gpt-5\.4"/g)).toHaveLength(2);
+      expect(mainTs).not.toMatch(/\bpi\s*\(/);
+      expect(mainTs).not.toContain("gpt-5.6-terra");
+      expect(mainTs).not.toContain("glm-5.3");
+      // The options object after the model string survives untouched.
+      expect(mainTs).toContain("captureSessions: false,");
+      // docker stays docker when selected.
+      expect(mainTs).toContain("ralph.docker()");
     });
   });
 

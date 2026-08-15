@@ -813,9 +813,9 @@ const copyTemplateFiles = (
 /**
  * Replace the agent factory and sandbox provider in a scaffolded main file.
  *
- * Templates use `claudeCode` as the default agent factory and `docker` as the
- * default sandbox provider. When a different agent, model, or sandbox provider
- * is selected, this function rewrites the imports and factory calls.
+ * Templates use `pi` as the default agent factory (ADR 0021) and `docker` as
+ * the default sandbox provider. When a different agent, model, or sandbox
+ * provider is selected, this function rewrites the imports and factory calls.
  *
  * Rewrite-skip guard (ADR 0021): when the selected agent is `pi` and no model
  * was given, the agent/model rewrite is skipped entirely so the template's
@@ -828,7 +828,7 @@ const copyTemplateFiles = (
  * their placeholder. The sandbox-provider rewrite is orthogonal and always
  * runs.
  */
-const rewriteMainTs = (
+export const rewriteMainTs = (
   configDir: string,
   agent: AgentEntry,
   model: string | undefined,
@@ -858,18 +858,31 @@ const rewriteMainTs = (
     // two-model split survives verbatim (see doc comment above).
     if (agent.name !== "pi" || model !== undefined) {
       const effectiveModel = model ?? agent.defaultModel;
-      // Replace factory function name in imports (e.g. claudeCode → pi)
-      // and all factory calls with the correct model.
-      // Templates always use claudeCode as the placeholder factory.
-      content = content.replace(/\bclaudeCode\b/g, agent.factoryImport);
-      // Replace model strings in factory calls: factoryImport("any-model")
+      // Templates always use `pi` as the placeholder agent factory. Rewrite
+      // the named-import specifier (e.g. `import { run, pi } from …` →
+      // `import { run, codex } from …`) and every call site — both bare
+      // `pi(…)` and member `ralph.pi(…)` — to the selected agent's factory.
+      // `pi` is short enough that a blanket word-boundary replace risks
+      // touching prose, so both rewrites are anchored to import/call syntax.
+      content = content.replace(
+        /(\bimport\s*\{[^}]*?)\bpi\b([^}]*\}\s*from\s*["']@mauricioliu\/ralph["'])/g,
+        `$1${agent.factoryImport}$2`,
+      );
+      content = content.replace(/\bpi\s*\(/g, `${agent.factoryImport}(`);
+      // Replace the model string in every factory call. The `\s*` after the
+      // opening paren tolerates call sites that span multiple lines — the
+      // model on its own line, options on the lines after it — and only the
+      // string literal is replaced, so trailing options survive untouched.
       const factoryCallRe = new RegExp(
-        `${agent.factoryImport}\\(["']([^"']+)["']\\)`,
+        `(${agent.factoryImport}\\(\\s*)(["'])([^"']+)\\2`,
         "g",
       );
       content = content.replace(
         factoryCallRe,
-        `${agent.factoryImport}("${effectiveModel}")`,
+        (_match, callPrefix: string) =>
+          // Re-emit the matched prefix (factory, paren, and any whitespace) so
+          // multi-line formatting is preserved, with a double-quoted model.
+          `${callPrefix}"${effectiveModel}"`,
       );
     }
 
