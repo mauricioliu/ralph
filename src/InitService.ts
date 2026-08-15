@@ -191,9 +191,20 @@ export interface AgentEntry {
   readonly name: string;
   readonly label: string;
   readonly defaultModel: string;
+  /**
+   * Planner/worker model pair, for agents whose scaffolded templates ship a
+   * two-model split (pi). Shown in the init picker hint instead of the
+   * single `Default model: ...` line. The scaffold rewrite-skip guard keeps
+   * the template's split verbatim when this agent is selected without an
+   * explicit `--model`. Absent for single-model agents.
+   */
+  readonly defaultModels?: {
+    readonly planner: string;
+    readonly worker: string;
+  };
   readonly factoryImport: string;
   readonly dockerfileTemplate: string;
-  /** Lines to include in the generated `.env.example` for this agent's API key. */
+  /** Lines to include in the generated `.env.example` for this agent's auth. */
   readonly envExample: string;
   /**
    * Copy-pasteable interactive command that feeds the custom-issue-tracker
@@ -260,7 +271,7 @@ ARG AGENT_GID=1000
 RUN groupmod -o -g $AGENT_GID node && usermod -o -u $AGENT_UID -g $AGENT_GID -d /home/agent -m -l agent node
 
 # Install pi coding agent (run as root before USER agent)
-RUN npm install -g @mariozechner/pi-coding-agent
+RUN npm install -g @earendil-works/pi-coding-agent
 
 USER \${AGENT_UID}:\${AGENT_GID}
 
@@ -458,11 +469,21 @@ ANTHROPIC_API_KEY=`,
   {
     name: "pi",
     label: "Pi",
-    defaultModel: "claude-sonnet-4-6",
+    defaultModel: "zai-coding-cn/glm-5.3:high",
+    defaultModels: {
+      planner: "openai-codex/gpt-5.6-terra:high",
+      worker: "zai-coding-cn/glm-5.3:high",
+    },
     factoryImport: "pi",
     dockerfileTemplate: PI_DOCKERFILE,
-    envExample: `# Anthropic API key
-ANTHROPIC_API_KEY=`,
+    envExample: `# Pi subscription auth — no API key needed.
+# Ralph transfers the host's ~/.pi/agent/auth.json (OAuth tokens for the
+# subscription models, e.g. openai-codex / zai-coding-cn) into each sandbox
+# before the agent starts. Run 'pi' on the host and authenticate once; the
+# host copy stays authoritative.
+# For API-key-based providers instead of subscriptions, set the provider's
+# env var (commented below) in .ralph/.env:
+# ANTHROPIC_API_KEY=`,
     setupCommand: `pi "$(cat ${SETUP_ISSUE_TRACKER_PATH})"`,
   },
   {
@@ -790,16 +811,27 @@ const copyTemplateFiles = (
   });
 
 /**
- * Replace the agent factory and sandbox provider in a scaffolded main.ts.
+ * Replace the agent factory and sandbox provider in a scaffolded main file.
  *
  * Templates use `claudeCode` as the default agent factory and `docker` as the
  * default sandbox provider. When a different agent, model, or sandbox provider
  * is selected, this function rewrites the imports and factory calls.
+ *
+ * Rewrite-skip guard (ADR 0021): when the selected agent is `pi` and no model
+ * was given, the agent/model rewrite is skipped entirely so the template's
+ * planner/worker two-model split survives verbatim — per-project config lives
+ * in the scaffolded main file, and a plain `ralph init --agent pi` must not
+ * collapse the split. Any other agent (or an explicit model) rewrites every
+ * factory call to a single model, falling back to the agent's default model
+ * when none was given. The guard keys off the *absence* of a model, not its
+ * value, so it stays correct regardless of which factory the templates use as
+ * their placeholder. The sandbox-provider rewrite is orthogonal and always
+ * runs.
  */
 const rewriteMainTs = (
   configDir: string,
   agent: AgentEntry,
-  model: string,
+  model: string | undefined,
   sandboxProvider: SandboxProviderEntry,
   mainFilename: string,
 ): Effect.Effect<void, Error, FileSystem.FileSystem> =>
@@ -822,19 +854,24 @@ const rewriteMainTs = (
       content = content.replace(/main\.mts/g, "main.ts");
     }
 
-    // Replace factory function name in imports (e.g. claudeCode → pi)
-    // and all factory calls with the correct model.
-    // Templates always use claudeCode as the placeholder factory.
-    content = content.replace(/\bclaudeCode\b/g, agent.factoryImport);
-    // Replace model strings in factory calls: factoryImport("any-model")
-    const factoryCallRe = new RegExp(
-      `${agent.factoryImport}\\(["']([^"']+)["']\\)`,
-      "g",
-    );
-    content = content.replace(
-      factoryCallRe,
-      `${agent.factoryImport}("${model}")`,
-    );
+    // Skip the agent/model rewrite for the pi default path so the template's
+    // two-model split survives verbatim (see doc comment above).
+    if (agent.name !== "pi" || model !== undefined) {
+      const effectiveModel = model ?? agent.defaultModel;
+      // Replace factory function name in imports (e.g. claudeCode → pi)
+      // and all factory calls with the correct model.
+      // Templates always use claudeCode as the placeholder factory.
+      content = content.replace(/\bclaudeCode\b/g, agent.factoryImport);
+      // Replace model strings in factory calls: factoryImport("any-model")
+      const factoryCallRe = new RegExp(
+        `${agent.factoryImport}\\(["']([^"']+)["']\\)`,
+        "g",
+      );
+      content = content.replace(
+        factoryCallRe,
+        `${agent.factoryImport}("${effectiveModel}")`,
+      );
+    }
 
     // Replace the sandbox provider. Templates always use `docker` as the
     // placeholder, where the registry name doubles as both the factory function
@@ -1013,7 +1050,13 @@ Run your **list** command inside the built image and confirm it returns the open
 
 export interface ScaffoldOptions {
   agent: AgentEntry;
-  model: string;
+  /**
+   * Model to rewrite every factory call to. When omitted, non-pi agents fall
+   * back to their default model; for `pi`, omission triggers the rewrite-skip
+   * guard (see `rewriteMainTs`) so the template's planner/worker model split
+   * survives verbatim.
+   */
+  model?: string;
   templateName?: string;
   createLabel?: boolean;
   issueTracker?: IssueTrackerEntry;

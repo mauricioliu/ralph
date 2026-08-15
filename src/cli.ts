@@ -91,13 +91,13 @@ const templateOption = Options.text("template").pipe(
 );
 
 const agentOption = Options.text("agent").pipe(
-  Options.withDescription("Agent to use (e.g. claude-code)"),
+  Options.withDescription("Agent to use (e.g. pi, claude-code, codex)"),
   Options.optional,
 );
 
 const initModelOption = Options.text("model").pipe(
   Options.withDescription(
-    "Model to use for the agent (e.g. claude-sonnet-4-6). Defaults to the agent's default model",
+    "Model to use for the agent (e.g. zai-coding-cn/glm-5.3:high). Defaults to the agent's default model; for pi without a model, the template's planner/worker model split is kept as-is",
   ),
   Options.optional,
 );
@@ -287,11 +287,16 @@ const initCommand = Command.make(
         const selected = yield* Effect.promise(() =>
           clack.select({
             message: "Select an agent:",
-            initialValue: "claude-code",
+            // Pi is the fork's default harness (ADR 0021) — preselect it.
+            initialValue: "pi",
             options: agents.map((a) => ({
               value: a.name,
               label: a.label,
-              hint: `Default model: ${a.defaultModel}`,
+              // Agents with a two-model split (pi) hint the planner/worker
+              // pair; single-model agents hint their default model.
+              hint: a.defaultModels
+                ? `Planner ${a.defaultModels.planner} · workers ${a.defaultModels.worker}`
+                : `Default model: ${a.defaultModel}`,
             })),
           }),
         );
@@ -303,11 +308,11 @@ const initCommand = Command.make(
         selectedAgent = getAgent(selected as string)!;
       }
 
-      // Resolve model: CLI flag > agent default
+      // Resolve model: explicit --model wins. No flag → undefined, which the
+      // scaffold's rewrite-skip guard reads as "keep the template's model
+      // split" for pi (and "agent default" for everything else).
       const selectedModel =
-        modelFlag._tag === "Some"
-          ? modelFlag.value
-          : selectedAgent.defaultModel;
+        modelFlag._tag === "Some" ? modelFlag.value : undefined;
 
       // Resolve sandbox provider: CLI flag > interactive select (no default — user must choose)
       const sandboxProviders = listSandboxProviders();

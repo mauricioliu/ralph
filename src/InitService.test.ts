@@ -71,7 +71,7 @@ describe("InitService scaffold", () => {
     },
     {
       agent: piAgent,
-      expectedKey: "ANTHROPIC_API_KEY=",
+      expectedKey: "auth.json",
       unexpectedKey: "OPENAI_KEY=",
       expectIssue191Link: false,
     },
@@ -690,6 +690,101 @@ describe("InitService scaffold", () => {
     });
   });
 
+  // --- Agent/model rewrite-skip guard (ADR 0021) ---
+
+  describe("agent/model rewrite-skip guard", () => {
+    it("pi without a model performs no agent/model rewriting — blank main.mts is byte-identical to the template", async () => {
+      const dir = await makeDir();
+      await runScaffold(dir, { agent: piAgent, model: undefined });
+
+      const scaffolded = await readFile(
+        join(dir, ".ralph", "main.mts"),
+        "utf-8",
+      );
+      const template = await readFile(
+        join(import.meta.dirname, "templates", "blank", "main.mts"),
+        "utf-8",
+      );
+      expect(scaffolded).toBe(template);
+    });
+
+    it("pi without a model keeps the template's two-model split verbatim (parallel-planner)", async () => {
+      const dir = await makeDir();
+      await runScaffold(dir, {
+        agent: piAgent,
+        model: undefined,
+        templateName: "parallel-planner",
+      });
+
+      const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
+      // Against the current claudeCode placeholder, the split survives
+      // untouched: the planner's model and the workers' model both remain.
+      expect(mainTs).toContain('claudeCode("claude-opus-4-7")');
+      expect(mainTs).toContain('claudeCode("claude-sonnet-4-6")');
+    });
+
+    it("pi without a model still rewrites the sandbox provider (orthogonal to the guard)", async () => {
+      const dir = await makeDir();
+      await runScaffold(dir, {
+        agent: piAgent,
+        model: undefined,
+        templateName: "parallel-planner",
+        sandboxProvider: getSandboxProvider("podman"),
+      });
+
+      const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
+      expect(mainTs).toContain(
+        'import { podman } from "@mauricioliu/ralph/sandboxes/podman"',
+      );
+      expect(mainTs).not.toContain("docker");
+      // The agent/model rewrite is still skipped.
+      expect(mainTs).toContain('claudeCode("claude-opus-4-7")');
+      expect(mainTs).toContain('claudeCode("claude-sonnet-4-6")');
+    });
+
+    it("pi with an explicit model collapses both roles to it", async () => {
+      const dir = await makeDir();
+      await runScaffold(dir, {
+        agent: piAgent,
+        model: "my-model",
+        templateName: "parallel-planner",
+      });
+
+      const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
+      // Every factory call rewrites to the single explicit model.
+      expect(mainTs.match(/pi\("my-model"\)/g)).toHaveLength(3);
+      expect(mainTs).not.toContain("claudeCode");
+      expect(mainTs).not.toContain("claude-opus-4-7");
+      expect(mainTs).not.toContain("claude-sonnet-4-6");
+    });
+
+    it("non-pi agent without a model still rewrites, using the agent's default (codex)", async () => {
+      const dir = await makeDir();
+      await runScaffold(dir, {
+        agent: codexAgent,
+        model: undefined,
+        templateName: "parallel-planner",
+      });
+
+      const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
+      expect(mainTs.match(/codex\("gpt-5\.4"\)/g)).toHaveLength(3);
+      expect(mainTs).not.toContain("claudeCode");
+    });
+
+    it("claude-code without a model still collapses the split to its default", async () => {
+      const dir = await makeDir();
+      await runScaffold(dir, {
+        agent: claudeCodeAgent,
+        model: undefined,
+        templateName: "parallel-planner",
+      });
+
+      const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
+      expect(mainTs.match(/claudeCode\("claude-opus-4-7"\)/g)).toHaveLength(3);
+      expect(mainTs).not.toContain("claude-sonnet-4-6");
+    });
+  });
+
   it("scaffolds pi agent with pi Dockerfile", async () => {
     const dir = await makeDir();
     await runScaffold(dir, { agent: piAgent, model: "claude-sonnet-4-6" });
@@ -699,7 +794,8 @@ describe("InitService scaffold", () => {
       "utf-8",
     );
     expect(dockerfile).toContain("FROM node:22-bookworm");
-    expect(dockerfile).toContain("@mariozechner/pi-coding-agent");
+    expect(dockerfile).toContain("@earendil-works/pi-coding-agent");
+    expect(dockerfile).not.toContain("@mariozechner/pi-coding-agent");
     expect(dockerfile).not.toContain("{{ISSUE_TRACKER_TOOLS}}");
   });
 
@@ -1968,7 +2064,7 @@ describe("InitService scaffold", () => {
         "utf-8",
       );
       expect(dockerfile).toContain("beads");
-      expect(dockerfile).toContain("@mariozechner/pi-coding-agent");
+      expect(dockerfile).toContain("@earendil-works/pi-coding-agent");
       expect(dockerfile).not.toContain("GitHub CLI");
     });
   });

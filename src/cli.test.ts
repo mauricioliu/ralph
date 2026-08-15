@@ -1,5 +1,5 @@
 import { exec } from "node:child_process";
-import { mkdtemp, readdir, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -291,5 +291,78 @@ describe("ralph CLI", () => {
     expect(stdout).toContain("Init complete");
     const entries = await readdir(join(hostDir, ".ralph"));
     expect(entries).toContain("SETUP_ISSUE_TRACKER.md");
+  });
+
+  it("init --agent pi without --model skips the rewrite and keeps the template's model split", async () => {
+    const hostDir = await mkdtemp(join(tmpdir(), "cli-host-"));
+    await initRepo(hostDir);
+
+    const { stdout } = await runCli(
+      "init --agent pi --template parallel-planner --sandbox docker --issue-tracker beads --build-image false --install-template-deps false",
+      hostDir,
+    );
+
+    expect(stdout).toContain("Init complete");
+    const main = await readFile(join(hostDir, ".ralph", "main.mts"), "utf-8");
+    // Rewrite-skip guard (ADR 0021): the template's placeholder factory and
+    // two-model split survive verbatim — nothing collapses to a single model.
+    expect(main).toContain('claudeCode("claude-opus-4-7")');
+    expect(main).toContain('claudeCode("claude-sonnet-4-6")');
+    expect(main).not.toContain('pi("');
+  });
+
+  it("init --agent pi scaffolds the @earendil-works pi package and subscription-auth env example", async () => {
+    const hostDir = await mkdtemp(join(tmpdir(), "cli-host-"));
+    await initRepo(hostDir);
+
+    const { stdout } = await runCli(
+      "init --agent pi --template blank --sandbox docker --issue-tracker beads --build-image false",
+      hostDir,
+    );
+
+    expect(stdout).toContain("Init complete");
+    const dockerfile = await readFile(
+      join(hostDir, ".ralph", "Dockerfile"),
+      "utf-8",
+    );
+    expect(dockerfile).toContain("@earendil-works/pi-coding-agent");
+    expect(dockerfile).not.toContain("@mariozechner/pi-coding-agent");
+
+    const envExample = await readFile(
+      join(hostDir, ".ralph", ".env.example"),
+      "utf-8",
+    );
+    expect(envExample).toContain("auth.json");
+  });
+
+  it("init --agent pi --model my-model collapses every factory call to that model", async () => {
+    const hostDir = await mkdtemp(join(tmpdir(), "cli-host-"));
+    await initRepo(hostDir);
+
+    const { stdout } = await runCli(
+      "init --agent pi --model my-model --template parallel-planner --sandbox docker --issue-tracker beads --build-image false --install-template-deps false",
+      hostDir,
+    );
+
+    expect(stdout).toContain("Init complete");
+    const main = await readFile(join(hostDir, ".ralph", "main.mts"), "utf-8");
+    expect(main).not.toContain("claudeCode");
+    // parallel-planner calls the factory three times — all collapsed.
+    expect(main.match(/pi\("my-model"\)/g)).toHaveLength(3);
+  });
+
+  it("init --agent codex without --model still rewrites to the agent's default model", async () => {
+    const hostDir = await mkdtemp(join(tmpdir(), "cli-host-"));
+    await initRepo(hostDir);
+
+    const { stdout } = await runCli(
+      "init --agent codex --template parallel-planner --sandbox docker --issue-tracker beads --build-image false --install-template-deps false",
+      hostDir,
+    );
+
+    expect(stdout).toContain("Init complete");
+    const main = await readFile(join(hostDir, ".ralph", "main.mts"), "utf-8");
+    expect(main).not.toContain("claudeCode");
+    expect(main.match(/codex\("gpt-5\.4"\)/g)).toHaveLength(3);
   });
 });
