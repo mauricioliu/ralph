@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 /**
- * MiniMax agent CLI wrapper for sandcastle.
+ * MiniMax agent CLI wrapper for ralph.
  *
  * Usage (print mode):
  *   minimax -p --mode json --model <model>
  *   # reads prompt from stdin, streams JSON lines to stdout
  *
  * The wrapper calls the MiniMax Anthropic-compatible API and emits
- * sandcastle-compatible JSON stream events:
+ * ralph-compatible JSON stream events:
  *   {type:"text", text:"..."}
  *   {type:"tool_call", name:"Bash", args:"..."}
  *   {type:"result", result:"..."}
@@ -91,7 +91,7 @@ function getTokens(): TokenInfo {
   if (!accessToken) {
     throw new Error(
       "MINIMAX_ACCESS_TOKEN environment variable is not set. " +
-        "Set it in .sandcastle/.env or export it before running.",
+        "Set it in .ralph/.env or export it before running.",
     );
   }
   return {

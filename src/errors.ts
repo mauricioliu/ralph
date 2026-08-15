@@ -56,7 +56,7 @@ export class AgentError extends Data.TaggedError("AgentError")<{
   readonly preservedWorktreePath?: string;
 }> {}
 
-/** .sandcastle/ config directory missing */
+/** .ralph/ config directory missing */
 export class ConfigDirError extends Data.TaggedError("ConfigDirError")<{
   readonly message: string;
 }> {}

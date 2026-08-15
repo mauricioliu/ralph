@@ -125,7 +125,7 @@ const makeTestSandboxFactory = (
       Effect.acquireUseRelease(
         Effect.promise(async () => {
           await rm(sandboxBaseDir, { recursive: true, force: true });
-          const branchName = `sandcastle/test-${++branchCounter}`;
+          const branchName = `ralph/test-${++branchCounter}`;
           await execAsync(
             `git worktree add -b "${branchName}" "${sandboxBaseDir}" HEAD`,
             { cwd: hostRepoDir },
@@ -737,7 +737,7 @@ describe("OrchestrateResult", () => {
         Effect.acquireUseRelease(
           Effect.promise(async () => {
             await rm(sandboxBaseDir, { recursive: true, force: true });
-            const branchName = `sandcastle/test-${++branchCounter}`;
+            const branchName = `ralph/test-${++branchCounter}`;
             await execAsync(
               `git worktree add -b "${branchName}" "${sandboxBaseDir}" HEAD`,
               { cwd: hostDir },
@@ -3077,7 +3077,7 @@ describe("Session capture integration", () => {
         Effect.acquireUseRelease(
           Effect.promise(async () => {
             await rm(sandboxBaseDir, { recursive: true, force: true });
-            const branchName = `sandcastle/test-${++branchCounter}`;
+            const branchName = `ralph/test-${++branchCounter}`;
             await execAsync(
               `git worktree add -b "${branchName}" "${sandboxBaseDir}" HEAD`,
               { cwd: hostRepoDir },
@@ -3409,7 +3409,7 @@ describe("Session capture integration", () => {
           Effect.promise(async () => {
             await rm(sandboxBaseDir, { recursive: true, force: true });
             await execAsync(
-              `git worktree add -b "sandcastle/fork-test" "${sandboxBaseDir}" HEAD`,
+              `git worktree add -b "ralph/fork-test" "${sandboxBaseDir}" HEAD`,
               { cwd: hostDir },
             );
           }),

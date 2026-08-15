@@ -10,7 +10,7 @@ When changing public-facing behavior, check `README.md` to see if the documentat
 
 ### Issue tracker
 
-Issues live as GitHub issues in `mattpocock/sandcastle`. See `docs/agents/issue-tracker.md`.
+Issues live as GitHub issues in `mauricioliu/ralph`. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 

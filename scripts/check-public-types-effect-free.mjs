@@ -3,7 +3,7 @@
  * Fail the build if any bundled .d.ts file under `dist/` references
  * `effect` or `@effect/*` packages.
  *
- * Effect powers Sandcastle's internals but must never leak into the public
+ * Effect powers Ralph's internals but must never leak into the public
  * type surface. See CODING_STANDARDS.md.
  */
 import { readdir, readFile } from "node:fs/promises";
@@ -14,8 +14,7 @@ const here = fileURLToPath(new URL(".", import.meta.url));
 const distDir = join(here, "..", "dist");
 
 /** Matches a string-literal module specifier of `effect` or `@effect/<sub>`. */
-const EFFECT_IMPORT_PATTERN =
-  /(["'])(?:effect(?:\/[^"']+)?|@effect\/[^"']+)\1/;
+const EFFECT_IMPORT_PATTERN = /(["'])(?:effect(?:\/[^"']+)?|@effect\/[^"']+)\1/;
 
 async function* walk(dir) {
   const entries = await readdir(dir, { withFileTypes: true });

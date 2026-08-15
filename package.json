@@ -1,5 +1,5 @@
 {
-  "name": "@ai-hero/sandcastle",
+  "name": "@mauricioliu/ralph",
   "version": "0.8.0",
   "description": "CLI for orchestrating AI agents in isolated sandbox environments",
   "type": "module",
@@ -32,7 +32,7 @@
     }
   },
   "bin": {
-    "sandcastle": "dist/main.js"
+    "ralph": "dist/main.js"
   },
   "scripts": {
     "build": "tsup",
@@ -44,10 +44,10 @@
     "format:check": "prettier --check .",
     "prepare": "husky",
     "release": "changeset publish",
-    "sandcastle": "npm run build && tsx .sandcastle/run.ts",
-    "test-podman": "npm run build && tsx --env-file=.sandcastle/.env .sandcastle/test-podman.ts",
-    "test-vercel": "npm run build && tsx --env-file=.sandcastle/.env .sandcastle/test-vercel.ts",
-    "test-interactive": "npm run build && tsx --env-file=.sandcastle/.env .sandcastle/test-interactive.ts"
+    "ralph": "npm run build && tsx .ralph/run.ts",
+    "test-podman": "npm run build && tsx --env-file=.ralph/.env .ralph/test-podman.ts",
+    "test-vercel": "npm run build && tsx --env-file=.ralph/.env .ralph/test-vercel.ts",
+    "test-interactive": "npm run build && tsx --env-file=.ralph/.env .ralph/test-interactive.ts"
   },
   "keywords": [
     "cli",
@@ -59,7 +59,7 @@
   "packageManager": "npm@10.9.2",
   "repository": {
     "type": "git",
-    "url": "https://github.com/mattpocock/sandcastle"
+    "url": "https://github.com/mauricioliu/ralph"
   },
   "license": "MIT",
   "devDependencies": {

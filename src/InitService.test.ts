@@ -51,7 +51,7 @@ describe("InitService scaffold", () => {
     await runScaffold(dir);
 
     const dockerfile = await readFile(
-      join(dir, ".sandcastle", "Dockerfile"),
+      join(dir, ".ralph", "Dockerfile"),
       "utf-8",
     );
     // Template has {{ISSUE_TRACKER_TOOLS}} replaced — should contain GitHub CLI (default issue tracker)
@@ -100,7 +100,7 @@ describe("InitService scaffold", () => {
       await runScaffold(dir, { agent, model: agent.defaultModel });
 
       const envExample = await readFile(
-        join(dir, ".sandcastle", ".env.example"),
+        join(dir, ".ralph", ".env.example"),
         "utf-8",
       );
       expect(envExample).toContain(expectedKey);
@@ -120,7 +120,7 @@ describe("InitService scaffold", () => {
     });
 
     const envExample = await readFile(
-      join(dir, ".sandcastle", ".env.example"),
+      join(dir, ".ralph", ".env.example"),
       "utf-8",
     );
     expect(envExample).toContain("GH_TOKEN=");
@@ -138,7 +138,7 @@ describe("InitService scaffold", () => {
     });
 
     const envExample = await readFile(
-      join(dir, ".sandcastle", ".env.example"),
+      join(dir, ".ralph", ".env.example"),
       "utf-8",
     );
     expect(envExample).not.toContain("GH_TOKEN=");
@@ -149,18 +149,16 @@ describe("InitService scaffold", () => {
     await runScaffold(dir);
 
     const { access } = await import("node:fs/promises");
-    await expect(
-      access(join(dir, ".sandcastle", "config.json")),
-    ).rejects.toThrow();
+    await expect(access(join(dir, ".ralph", "config.json"))).rejects.toThrow();
   });
 
-  it("errors if .sandcastle/ already exists", async () => {
+  it("errors if .ralph/ already exists", async () => {
     const dir = await makeDir();
     const { mkdir } = await import("node:fs/promises");
-    await mkdir(join(dir, ".sandcastle"));
+    await mkdir(join(dir, ".ralph"));
 
     await expect(runScaffold(dir)).rejects.toThrow(
-      ".sandcastle/ directory already exists",
+      ".ralph/ directory already exists",
     );
   });
 
@@ -169,7 +167,7 @@ describe("InitService scaffold", () => {
     await runScaffold(dir);
 
     const gitignore = await readFile(
-      join(dir, ".sandcastle", ".gitignore"),
+      join(dir, ".ralph", ".gitignore"),
       "utf-8",
     );
     expect(gitignore).toContain(".env");
@@ -183,7 +181,7 @@ describe("InitService scaffold", () => {
     await runScaffold(dir);
 
     const dockerfile = await readFile(
-      join(dir, ".sandcastle", "Dockerfile"),
+      join(dir, ".ralph", "Dockerfile"),
       "utf-8",
     );
     expect(dockerfile).toContain(SANDBOX_REPO_DIR);
@@ -196,7 +194,7 @@ describe("InitService scaffold", () => {
       await runScaffold(dir, { agent, model: agent.defaultModel });
 
       const dockerfile = await readFile(
-        join(dir, ".sandcastle", "Dockerfile"),
+        join(dir, ".ralph", "Dockerfile"),
         "utf-8",
       );
       expect(dockerfile).toContain("groupmod -o -g $AGENT_GID node");
@@ -211,7 +209,7 @@ describe("InitService scaffold", () => {
     await runScaffold(dir);
 
     const dockerfile = await readFile(
-      join(dir, ".sandcastle", "Dockerfile"),
+      join(dir, ".ralph", "Dockerfile"),
       "utf-8",
     );
     expect(dockerfile).not.toContain("corepack");
@@ -222,10 +220,7 @@ describe("InitService scaffold", () => {
     const dir = await makeDir();
     await runScaffold(dir);
 
-    const prompt = await readFile(
-      join(dir, ".sandcastle", "prompt.md"),
-      "utf-8",
-    );
+    const prompt = await readFile(join(dir, ".ralph", "prompt.md"), "utf-8");
     expect(prompt).toContain("# ");
     expect(prompt).toContain("!`");
     expect(prompt).toContain("<promise>COMPLETE</promise>");
@@ -235,7 +230,7 @@ describe("InitService scaffold", () => {
     const dir = await makeDir();
     await runScaffold(dir, { templateName: "blank" });
 
-    const configDir = join(dir, ".sandcastle");
+    const configDir = join(dir, ".ralph");
     const prompt = await readFile(join(configDir, "prompt.md"), "utf-8");
     expect(prompt).toContain("!`");
     expect(prompt).toContain("<promise>COMPLETE</promise>");
@@ -244,25 +239,19 @@ describe("InitService scaffold", () => {
     await expect(access(join(configDir, "main.mts"))).resolves.toBeUndefined();
   });
 
-  it("blank template main.mts imports from @ai-hero/sandcastle", async () => {
+  it("blank template main.mts imports from @mauricioliu/ralph", async () => {
     const dir = await makeDir();
     await runScaffold(dir, { templateName: "blank" });
 
-    const mainTs = await readFile(
-      join(dir, ".sandcastle", "main.mts"),
-      "utf-8",
-    );
-    expect(mainTs).toContain('"@ai-hero/sandcastle"');
+    const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
+    expect(mainTs).toContain('"@mauricioliu/ralph"');
   });
 
   it("blank template main.mts calls run()", async () => {
     const dir = await makeDir();
     await runScaffold(dir, { templateName: "blank" });
 
-    const mainTs = await readFile(
-      join(dir, ".sandcastle", "main.mts"),
-      "utf-8",
-    );
+    const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
     expect(mainTs).toContain("run(");
   });
 
@@ -272,14 +261,8 @@ describe("InitService scaffold", () => {
     await runScaffold(dir1);
     await runScaffold(dir2, { templateName: "blank" });
 
-    const prompt1 = await readFile(
-      join(dir1, ".sandcastle", "prompt.md"),
-      "utf-8",
-    );
-    const prompt2 = await readFile(
-      join(dir2, ".sandcastle", "prompt.md"),
-      "utf-8",
-    );
+    const prompt1 = await readFile(join(dir1, ".ralph", "prompt.md"), "utf-8");
+    const prompt2 = await readFile(join(dir2, ".ralph", "prompt.md"), "utf-8");
     expect(prompt1).toBe(prompt2);
   });
 
@@ -289,10 +272,7 @@ describe("InitService scaffold", () => {
     const dir = await makeDir();
     await runScaffold(dir, { model: "claude-sonnet-4-6" });
 
-    const mainTs = await readFile(
-      join(dir, ".sandcastle", "main.mts"),
-      "utf-8",
-    );
+    const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
     expect(mainTs).toContain('claudeCode("claude-sonnet-4-6")');
     // Should not contain the template's original model
     expect(mainTs).not.toContain('claudeCode("claude-opus-4-7")');
@@ -302,10 +282,7 @@ describe("InitService scaffold", () => {
     const dir = await makeDir();
     await runScaffold(dir);
 
-    const mainTs = await readFile(
-      join(dir, ".sandcastle", "main.mts"),
-      "utf-8",
-    );
+    const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
     expect(mainTs).toContain('claudeCode("claude-opus-4-7")');
   });
 
@@ -315,32 +292,26 @@ describe("InitService scaffold", () => {
     const dir = await makeDir();
     await runScaffold(dir, { templateName: "simple-loop" });
 
-    const configDir = join(dir, ".sandcastle");
+    const configDir = join(dir, ".ralph");
     const { access } = await import("node:fs/promises");
 
     await expect(access(join(configDir, "main.mts"))).resolves.toBeUndefined();
     await expect(access(join(configDir, "prompt.md"))).resolves.toBeUndefined();
   });
 
-  it("simple-loop main.mts imports from @ai-hero/sandcastle", async () => {
+  it("simple-loop main.mts imports from @mauricioliu/ralph", async () => {
     const dir = await makeDir();
     await runScaffold(dir, { templateName: "simple-loop" });
 
-    const mainTs = await readFile(
-      join(dir, ".sandcastle", "main.mts"),
-      "utf-8",
-    );
-    expect(mainTs).toContain('"@ai-hero/sandcastle"');
+    const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
+    expect(mainTs).toContain('"@mauricioliu/ralph"');
   });
 
-  it("simple-loop main.mts contains sandcastle.run() with expected options", async () => {
+  it("simple-loop main.mts contains ralph.run() with expected options", async () => {
     const dir = await makeDir();
     await runScaffold(dir, { templateName: "simple-loop" });
 
-    const mainTs = await readFile(
-      join(dir, ".sandcastle", "main.mts"),
-      "utf-8",
-    );
+    const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
     expect(mainTs).toContain("run(");
     expect(mainTs).toContain("maxIterations");
     expect(mainTs).toContain("3");
@@ -355,10 +326,7 @@ describe("InitService scaffold", () => {
     const dir = await makeDir();
     await runScaffold(dir, { templateName: "simple-loop" });
 
-    const prompt = await readFile(
-      join(dir, ".sandcastle", "prompt.md"),
-      "utf-8",
-    );
+    const prompt = await readFile(join(dir, ".ralph", "prompt.md"), "utf-8");
     expect(prompt).toContain("!`gh issue");
     expect(prompt).toContain("!`git log");
     expect(prompt).toContain("<promise>COMPLETE</promise>");
@@ -369,7 +337,7 @@ describe("InitService scaffold", () => {
       const dir = await makeDir();
       await runScaffold(dir, { templateName: "sequential-reviewer" });
 
-      const configDir = join(dir, ".sandcastle");
+      const configDir = join(dir, ".ralph");
       const { access } = await import("node:fs/promises");
 
       await expect(
@@ -383,25 +351,19 @@ describe("InitService scaffold", () => {
       ).resolves.toBeUndefined();
     });
 
-    it("main.mts imports from @ai-hero/sandcastle", async () => {
+    it("main.mts imports from @mauricioliu/ralph", async () => {
       const dir = await makeDir();
       await runScaffold(dir, { templateName: "sequential-reviewer" });
 
-      const mainTs = await readFile(
-        join(dir, ".sandcastle", "main.mts"),
-        "utf-8",
-      );
-      expect(mainTs).toContain('"@ai-hero/sandcastle"');
+      const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
+      expect(mainTs).toContain('"@mauricioliu/ralph"');
     });
 
     it("main.mts uses createSandbox so implementer and reviewer share a sandbox", async () => {
       const dir = await makeDir();
       await runScaffold(dir, { templateName: "sequential-reviewer" });
 
-      const mainTs = await readFile(
-        join(dir, ".sandcastle", "main.mts"),
-        "utf-8",
-      );
+      const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
       expect(mainTs).toContain("createSandbox");
       expect(mainTs).toContain("sandbox.run");
       expect(mainTs).toContain("sandbox.close");
@@ -413,10 +375,7 @@ describe("InitService scaffold", () => {
       const dir = await makeDir();
       await runScaffold(dir, { templateName: "sequential-reviewer" });
 
-      const mainTs = await readFile(
-        join(dir, ".sandcastle", "main.mts"),
-        "utf-8",
-      );
+      const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
       expect(mainTs).not.toContain("merge-to-head");
     });
 
@@ -424,10 +383,7 @@ describe("InitService scaffold", () => {
       const dir = await makeDir();
       await runScaffold(dir, { templateName: "sequential-reviewer" });
 
-      const mainTs = await readFile(
-        join(dir, ".sandcastle", "main.mts"),
-        "utf-8",
-      );
+      const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
       expect(mainTs).toContain("implement.commits.length");
     });
 
@@ -436,7 +392,7 @@ describe("InitService scaffold", () => {
       await runScaffold(dir, { templateName: "sequential-reviewer" });
 
       const prompt = await readFile(
-        join(dir, ".sandcastle", "implement-prompt.md"),
+        join(dir, ".ralph", "implement-prompt.md"),
         "utf-8",
       );
       expect(prompt).toContain("gh issue list");
@@ -451,7 +407,7 @@ describe("InitService scaffold", () => {
       await runScaffold(dir, { templateName: "sequential-reviewer" });
 
       const prompt = await readFile(
-        join(dir, ".sandcastle", "implement-prompt.md"),
+        join(dir, ".ralph", "implement-prompt.md"),
         "utf-8",
       );
       expect(prompt).toContain(
@@ -466,7 +422,7 @@ describe("InitService scaffold", () => {
       await runScaffold(dir, { templateName: "sequential-reviewer" });
 
       const prompt = await readFile(
-        join(dir, ".sandcastle", "review-prompt.md"),
+        join(dir, ".ralph", "review-prompt.md"),
         "utf-8",
       );
       expect(prompt).toContain("{{BRANCH}}");
@@ -484,7 +440,7 @@ describe("InitService scaffold", () => {
       await runScaffold(dir, { templateName: "sequential-reviewer" });
 
       const standards = await readFile(
-        join(dir, ".sandcastle", "CODING_STANDARDS.md"),
+        join(dir, ".ralph", "CODING_STANDARDS.md"),
         "utf-8",
       );
       expect(standards).toContain("# Coding Standards");
@@ -492,15 +448,15 @@ describe("InitService scaffold", () => {
       expect(standards).toContain("Customize");
     });
 
-    it("review-prompt.md references @.sandcastle/CODING_STANDARDS.md", async () => {
+    it("review-prompt.md references @.ralph/CODING_STANDARDS.md", async () => {
       const dir = await makeDir();
       await runScaffold(dir, { templateName: "sequential-reviewer" });
 
       const prompt = await readFile(
-        join(dir, ".sandcastle", "review-prompt.md"),
+        join(dir, ".ralph", "review-prompt.md"),
         "utf-8",
       );
-      expect(prompt).toContain("@.sandcastle/CODING_STANDARDS.md");
+      expect(prompt).toContain("@.ralph/CODING_STANDARDS.md");
     });
 
     it("review-prompt.md diffs against {{TARGET_BRANCH}} (the fork point), not the branch itself", async () => {
@@ -508,7 +464,7 @@ describe("InitService scaffold", () => {
       await runScaffold(dir, { templateName: "sequential-reviewer" });
 
       const prompt = await readFile(
-        join(dir, ".sandcastle", "review-prompt.md"),
+        join(dir, ".ralph", "review-prompt.md"),
         "utf-8",
       );
       expect(prompt).toContain("git diff {{TARGET_BRANCH}}...{{BRANCH}}");
@@ -524,10 +480,7 @@ describe("InitService scaffold", () => {
       const dir = await makeDir();
       await runScaffold(dir, { templateName: "sequential-reviewer" });
 
-      const mainTs = await readFile(
-        join(dir, ".sandcastle", "main.mts"),
-        "utf-8",
-      );
+      const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
       const implementerSection = mainTs.slice(
         mainTs.indexOf('name: "implementer"'),
         mainTs.indexOf('name: "implementer"') + 200,
@@ -540,10 +493,7 @@ describe("InitService scaffold", () => {
       const dir = await makeDir();
       await runScaffold(dir, { templateName: "sequential-reviewer" });
 
-      const mainTs = await readFile(
-        join(dir, ".sandcastle", "main.mts"),
-        "utf-8",
-      );
+      const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
       const noCommitIndex = mainTs.indexOf("!implement.commits.length");
       const section = mainTs.slice(noCommitIndex, noCommitIndex + 400);
       expect(section).toContain("break");
@@ -556,7 +506,7 @@ describe("InitService scaffold", () => {
     await runScaffold(dir, { templateName: "simple-loop" });
 
     const { readdir } = await import("node:fs/promises");
-    const files = await readdir(join(dir, ".sandcastle"));
+    const files = await readdir(join(dir, ".ralph"));
     const compiledFiles = files.filter(
       (f) =>
         f.endsWith(".js") ||
@@ -585,21 +535,21 @@ describe("InitService scaffold", () => {
         packageManager,
       );
 
-    it("blank template returns steps mentioning .env and main filename (not npx sandcastle run)", () => {
+    it("blank template returns steps mentioning .env and main filename (not npx ralph run)", () => {
       const lines = next("blank", "main.mts");
       expect(lines.length).toBeGreaterThanOrEqual(2);
       const joined = lines.join("\n");
       expect(joined).toContain(".env");
       expect(joined).toContain("main.mts");
-      expect(joined).not.toContain("npx sandcastle run");
+      expect(joined).not.toContain("npx ralph run");
     });
 
-    it("non-blank template returns steps mentioning .env, package.json scripts, and npm run sandcastle", () => {
+    it("non-blank template returns steps mentioning .env, package.json scripts, and npm run ralph", () => {
       const lines = next("simple-loop", "main.mts");
       const joined = lines.join("\n");
       expect(joined).toContain(".env");
       expect(joined).toContain("package.json");
-      expect(joined).toContain("npm run sandcastle");
+      expect(joined).toContain("npm run ralph");
     });
 
     it("non-blank template includes a note about customizing the install command", () => {
@@ -723,7 +673,7 @@ describe("InitService scaffold", () => {
       expect(joined).toContain("SETUP_ISSUE_TRACKER.md");
       expect(joined).toContain(claudeCodeAgent.setupCommand);
       // The template-driven steps must not leak into the custom branch.
-      expect(joined).not.toContain("npm run sandcastle");
+      expect(joined).not.toContain("npm run ralph");
     });
 
     it("custom issue tracker warns the setup command runs on the host", () => {
@@ -745,7 +695,7 @@ describe("InitService scaffold", () => {
     await runScaffold(dir, { agent: piAgent, model: "claude-sonnet-4-6" });
 
     const dockerfile = await readFile(
-      join(dir, ".sandcastle", "Dockerfile"),
+      join(dir, ".ralph", "Dockerfile"),
       "utf-8",
     );
     expect(dockerfile).toContain("FROM node:22-bookworm");
@@ -757,10 +707,7 @@ describe("InitService scaffold", () => {
     const dir = await makeDir();
     await runScaffold(dir, { agent: piAgent, model: "claude-sonnet-4-6" });
 
-    const mainTs = await readFile(
-      join(dir, ".sandcastle", "main.mts"),
-      "utf-8",
-    );
+    const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
     expect(mainTs).toContain('pi("claude-sonnet-4-6")');
     expect(mainTs).not.toContain("claudeCode");
   });
@@ -770,7 +717,7 @@ describe("InitService scaffold", () => {
     await runScaffold(dir, { agent: codexAgent, model: "gpt-5.4-mini" });
 
     const dockerfile = await readFile(
-      join(dir, ".sandcastle", "Dockerfile"),
+      join(dir, ".ralph", "Dockerfile"),
       "utf-8",
     );
     expect(dockerfile).toContain("FROM node:22-bookworm");
@@ -782,10 +729,7 @@ describe("InitService scaffold", () => {
     const dir = await makeDir();
     await runScaffold(dir, { agent: codexAgent, model: "gpt-5.4-mini" });
 
-    const mainTs = await readFile(
-      join(dir, ".sandcastle", "main.mts"),
-      "utf-8",
-    );
+    const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
     expect(mainTs).toContain('codex("gpt-5.4-mini")');
     expect(mainTs).not.toContain("claudeCode");
   });
@@ -795,7 +739,7 @@ describe("InitService scaffold", () => {
     await runScaffold(dir, { agent: cursorAgent, model: "claude-sonnet-4-6" });
 
     const dockerfile = await readFile(
-      join(dir, ".sandcastle", "Dockerfile"),
+      join(dir, ".ralph", "Dockerfile"),
       "utf-8",
     );
     expect(dockerfile).toContain("FROM node:22-bookworm");
@@ -813,43 +757,34 @@ describe("InitService scaffold", () => {
     const dir = await makeDir();
     await runScaffold(dir, { agent: cursorAgent, model: "claude-sonnet-4-6" });
 
-    const mainTs = await readFile(
-      join(dir, ".sandcastle", "main.mts"),
-      "utf-8",
-    );
+    const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
     expect(mainTs).toContain('cursor("claude-sonnet-4-6")');
     expect(mainTs).not.toContain("claudeCode");
   });
 
   // --- createLabel option ---
 
-  it("simple-loop prompt.md retains --label Sandcastle when createLabel is true", async () => {
+  it("simple-loop prompt.md retains --label Ralph when createLabel is true", async () => {
     const dir = await makeDir();
     await runScaffold(dir, { templateName: "simple-loop", createLabel: true });
 
-    const prompt = await readFile(
-      join(dir, ".sandcastle", "prompt.md"),
-      "utf-8",
-    );
-    expect(prompt).toContain("--label Sandcastle");
+    const prompt = await readFile(join(dir, ".ralph", "prompt.md"), "utf-8");
+    expect(prompt).toContain("--label Ralph");
   });
 
-  it("simple-loop prompt.md strips --label Sandcastle when createLabel is false", async () => {
+  it("simple-loop prompt.md strips --label Ralph when createLabel is false", async () => {
     const dir = await makeDir();
     await runScaffold(dir, { templateName: "simple-loop", createLabel: false });
 
-    const prompt = await readFile(
-      join(dir, ".sandcastle", "prompt.md"),
-      "utf-8",
-    );
-    expect(prompt).not.toContain("--label Sandcastle");
+    const prompt = await readFile(join(dir, ".ralph", "prompt.md"), "utf-8");
+    expect(prompt).not.toContain("--label Ralph");
     // The gh issue list command should still be valid
     expect(prompt).toContain("gh issue list");
     // No double spaces in gh commands from removal
     expect(prompt).not.toMatch(/gh issue list {2}/);
   });
 
-  it("parallel-planner plan-prompt.md strips --label Sandcastle when createLabel is false", async () => {
+  it("parallel-planner plan-prompt.md strips --label Ralph when createLabel is false", async () => {
     const dir = await makeDir();
     await runScaffold(dir, {
       templateName: "parallel-planner",
@@ -857,14 +792,14 @@ describe("InitService scaffold", () => {
     });
 
     const prompt = await readFile(
-      join(dir, ".sandcastle", "plan-prompt.md"),
+      join(dir, ".ralph", "plan-prompt.md"),
       "utf-8",
     );
-    expect(prompt).not.toContain("--label Sandcastle");
+    expect(prompt).not.toContain("--label Ralph");
     expect(prompt).toContain("gh issue list");
   });
 
-  it("sequential-reviewer implement-prompt.md strips --label Sandcastle when createLabel is false", async () => {
+  it("sequential-reviewer implement-prompt.md strips --label Ralph when createLabel is false", async () => {
     const dir = await makeDir();
     await runScaffold(dir, {
       templateName: "sequential-reviewer",
@@ -872,10 +807,10 @@ describe("InitService scaffold", () => {
     });
 
     const prompt = await readFile(
-      join(dir, ".sandcastle", "implement-prompt.md"),
+      join(dir, ".ralph", "implement-prompt.md"),
       "utf-8",
     );
-    expect(prompt).not.toContain("--label Sandcastle");
+    expect(prompt).not.toContain("--label Ralph");
     expect(prompt).toContain("gh issue list");
   });
 
@@ -894,7 +829,7 @@ describe("InitService scaffold", () => {
     for (const { template, file } of cases) {
       const dir = await makeDir();
       await runScaffold(dir, { templateName: template });
-      const prompt = await readFile(join(dir, ".sandcastle", file), "utf-8");
+      const prompt = await readFile(join(dir, ".ralph", file), "utf-8");
       expect(prompt, `${template}/${file}`).not.toContain("{{TASK_ID}}");
     }
   });
@@ -903,11 +838,8 @@ describe("InitService scaffold", () => {
     const dir = await makeDir();
     await runScaffold(dir, { templateName: "simple-loop" });
 
-    const prompt = await readFile(
-      join(dir, ".sandcastle", "prompt.md"),
-      "utf-8",
-    );
-    expect(prompt).toContain("--label Sandcastle");
+    const prompt = await readFile(join(dir, ".ralph", "prompt.md"), "utf-8");
+    expect(prompt).toContain("--label Ralph");
   });
 
   it("unknown template name throws a clear error", async () => {
@@ -922,7 +854,7 @@ describe("InitService scaffold", () => {
       const dir = await makeDir();
       await runScaffold(dir, { templateName: "parallel-planner" });
 
-      const configDir = join(dir, ".sandcastle");
+      const configDir = join(dir, ".ralph");
       const { access } = await import("node:fs/promises");
 
       await expect(
@@ -939,37 +871,28 @@ describe("InitService scaffold", () => {
       ).resolves.toBeUndefined();
     });
 
-    it("main.mts uses npm install hook and imports sandcastle", async () => {
+    it("main.mts uses npm install hook and imports ralph", async () => {
       const dir = await makeDir();
       await runScaffold(dir, { templateName: "parallel-planner" });
 
-      const mainTs = await readFile(
-        join(dir, ".sandcastle", "main.mts"),
-        "utf-8",
-      );
+      const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
       expect(mainTs).toContain("npm install");
-      expect(mainTs).toContain("sandcastle");
+      expect(mainTs).toContain("ralph");
     });
 
-    it("main.mts imports from @ai-hero/sandcastle", async () => {
+    it("main.mts imports from @mauricioliu/ralph", async () => {
       const dir = await makeDir();
       await runScaffold(dir, { templateName: "parallel-planner" });
 
-      const mainTs = await readFile(
-        join(dir, ".sandcastle", "main.mts"),
-        "utf-8",
-      );
-      expect(mainTs).toContain('"@ai-hero/sandcastle"');
+      const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
+      expect(mainTs).toContain('"@mauricioliu/ralph"');
     });
 
     it("main.mts references the specified model for all factory calls", async () => {
       const dir = await makeDir();
       await runScaffold(dir, { templateName: "parallel-planner" });
 
-      const mainTs = await readFile(
-        join(dir, ".sandcastle", "main.mts"),
-        "utf-8",
-      );
+      const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
       // All factory calls should use the specified model (default: claude-opus-4-7)
       expect(mainTs).toContain("claude-opus-4-7");
     });
@@ -979,7 +902,7 @@ describe("InitService scaffold", () => {
       await runScaffold(dir, { templateName: "parallel-planner" });
 
       const prompt = await readFile(
-        join(dir, ".sandcastle", "implement-prompt.md"),
+        join(dir, ".ralph", "implement-prompt.md"),
         "utf-8",
       );
       expect(prompt).toContain("{{TASK_ID}}");
@@ -992,7 +915,7 @@ describe("InitService scaffold", () => {
       await runScaffold(dir, { templateName: "parallel-planner" });
 
       const prompt = await readFile(
-        join(dir, ".sandcastle", "merge-prompt.md"),
+        join(dir, ".ralph", "merge-prompt.md"),
         "utf-8",
       );
       expect(prompt).toContain("{{BRANCHES}}");
@@ -1003,10 +926,7 @@ describe("InitService scaffold", () => {
       const dir = await makeDir();
       await runScaffold(dir, { templateName: "parallel-planner" });
 
-      const mainTs = await readFile(
-        join(dir, ".sandcastle", "main.mts"),
-        "utf-8",
-      );
+      const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
       expect(mainTs).not.toContain("completedBranches.length === 1");
     });
 
@@ -1014,7 +934,7 @@ describe("InitService scaffold", () => {
       const dir = await makeDir();
       await runScaffold(dir, { templateName: "parallel-planner" });
 
-      const configDir = join(dir, ".sandcastle");
+      const configDir = join(dir, ".ralph");
       const dockerfile = await readFile(join(configDir, "Dockerfile"), "utf-8");
       expect(dockerfile).toContain("FROM node:22-bookworm");
       expect(dockerfile).not.toContain("{{ISSUE_TRACKER_TOOLS}}");
@@ -1034,7 +954,7 @@ describe("InitService scaffold", () => {
       const dir = await makeDir();
       await runScaffold(dir, { templateName: "parallel-planner-with-review" });
 
-      const configDir = join(dir, ".sandcastle");
+      const configDir = join(dir, ".ralph");
       const { access } = await import("node:fs/promises");
 
       await expect(
@@ -1054,25 +974,19 @@ describe("InitService scaffold", () => {
       ).resolves.toBeUndefined();
     });
 
-    it("main.mts imports from @ai-hero/sandcastle", async () => {
+    it("main.mts imports from @mauricioliu/ralph", async () => {
       const dir = await makeDir();
       await runScaffold(dir, { templateName: "parallel-planner-with-review" });
 
-      const mainTs = await readFile(
-        join(dir, ".sandcastle", "main.mts"),
-        "utf-8",
-      );
-      expect(mainTs).toContain('"@ai-hero/sandcastle"');
+      const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
+      expect(mainTs).toContain('"@mauricioliu/ralph"');
     });
 
     it("main.mts uses createSandbox for shared sandbox per branch", async () => {
       const dir = await makeDir();
       await runScaffold(dir, { templateName: "parallel-planner-with-review" });
 
-      const mainTs = await readFile(
-        join(dir, ".sandcastle", "main.mts"),
-        "utf-8",
-      );
+      const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
       expect(mainTs).toContain("createSandbox");
       expect(mainTs).toContain("sandbox.run");
       expect(mainTs).toContain("sandbox.close");
@@ -1082,10 +996,7 @@ describe("InitService scaffold", () => {
       const dir = await makeDir();
       await runScaffold(dir, { templateName: "parallel-planner-with-review" });
 
-      const mainTs = await readFile(
-        join(dir, ".sandcastle", "main.mts"),
-        "utf-8",
-      );
+      const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
       expect(mainTs).toContain("implement-prompt.md");
       expect(mainTs).toContain("review-prompt.md");
       expect(mainTs).toContain("implement.commits.length > 0");
@@ -1095,10 +1006,7 @@ describe("InitService scaffold", () => {
       const dir = await makeDir();
       await runScaffold(dir, { templateName: "parallel-planner-with-review" });
 
-      const mainTs = await readFile(
-        join(dir, ".sandcastle", "main.mts"),
-        "utf-8",
-      );
+      const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
       // Reviewer result must be captured, not discarded
       expect(mainTs).toContain("const review = await sandbox.run");
       // Commits from both implementer and reviewer must be merged
@@ -1110,10 +1018,7 @@ describe("InitService scaffold", () => {
       const dir = await makeDir();
       await runScaffold(dir, { templateName: "parallel-planner-with-review" });
 
-      const mainTs = await readFile(
-        join(dir, ".sandcastle", "main.mts"),
-        "utf-8",
-      );
+      const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
       expect(mainTs).toContain("Promise.allSettled");
     });
 
@@ -1121,10 +1026,7 @@ describe("InitService scaffold", () => {
       const dir = await makeDir();
       await runScaffold(dir, { templateName: "parallel-planner-with-review" });
 
-      const mainTs = await readFile(
-        join(dir, ".sandcastle", "main.mts"),
-        "utf-8",
-      );
+      const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
       // Check planner maxIterations: 1 (near "planner" name)
       const plannerSection = mainTs.slice(
         mainTs.indexOf('name: "planner"') - 200,
@@ -1159,7 +1061,7 @@ describe("InitService scaffold", () => {
       await runScaffold(dir, { templateName: "parallel-planner-with-review" });
 
       const prompt = await readFile(
-        join(dir, ".sandcastle", "implement-prompt.md"),
+        join(dir, ".ralph", "implement-prompt.md"),
         "utf-8",
       );
       expect(prompt).toContain("{{TASK_ID}}");
@@ -1172,7 +1074,7 @@ describe("InitService scaffold", () => {
       await runScaffold(dir, { templateName: "parallel-planner-with-review" });
 
       const prompt = await readFile(
-        join(dir, ".sandcastle", "review-prompt.md"),
+        join(dir, ".ralph", "review-prompt.md"),
         "utf-8",
       );
       expect(prompt).toContain("{{BRANCH}}");
@@ -1183,7 +1085,7 @@ describe("InitService scaffold", () => {
       await runScaffold(dir, { templateName: "parallel-planner-with-review" });
 
       const prompt = await readFile(
-        join(dir, ".sandcastle", "merge-prompt.md"),
+        join(dir, ".ralph", "merge-prompt.md"),
         "utf-8",
       );
       expect(prompt).toContain("{{BRANCHES}}");
@@ -1201,7 +1103,7 @@ describe("InitService scaffold", () => {
       const dir = await makeDir();
       await runScaffold(dir, { templateName: "parallel-planner-with-review" });
 
-      const configDir = join(dir, ".sandcastle");
+      const configDir = join(dir, ".ralph");
       const dockerfile = await readFile(join(configDir, "Dockerfile"), "utf-8");
       expect(dockerfile).toContain("FROM node:22-bookworm");
       expect(dockerfile).not.toContain("{{ISSUE_TRACKER_TOOLS}}");
@@ -1219,10 +1121,7 @@ describe("InitService scaffold", () => {
       const dir = await makeDir();
       await runScaffold(dir, { templateName: "parallel-planner-with-review" });
 
-      const mainTs = await readFile(
-        join(dir, ".sandcastle", "main.mts"),
-        "utf-8",
-      );
+      const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
       expect(mainTs).toContain("claude-opus-4-7");
     });
 
@@ -1231,22 +1130,22 @@ describe("InitService scaffold", () => {
       await runScaffold(dir, { templateName: "parallel-planner-with-review" });
 
       const standards = await readFile(
-        join(dir, ".sandcastle", "CODING_STANDARDS.md"),
+        join(dir, ".ralph", "CODING_STANDARDS.md"),
         "utf-8",
       );
       expect(standards).toContain("# Coding Standards");
       expect(standards).toContain("Customize");
     });
 
-    it("review-prompt.md references @.sandcastle/CODING_STANDARDS.md", async () => {
+    it("review-prompt.md references @.ralph/CODING_STANDARDS.md", async () => {
       const dir = await makeDir();
       await runScaffold(dir, { templateName: "parallel-planner-with-review" });
 
       const prompt = await readFile(
-        join(dir, ".sandcastle", "review-prompt.md"),
+        join(dir, ".ralph", "review-prompt.md"),
         "utf-8",
       );
-      expect(prompt).toContain("@.sandcastle/CODING_STANDARDS.md");
+      expect(prompt).toContain("@.ralph/CODING_STANDARDS.md");
     });
 
     it("review-prompt.md diffs against {{TARGET_BRANCH}} (the fork point), not the branch itself", async () => {
@@ -1254,7 +1153,7 @@ describe("InitService scaffold", () => {
       await runScaffold(dir, { templateName: "parallel-planner-with-review" });
 
       const prompt = await readFile(
-        join(dir, ".sandcastle", "review-prompt.md"),
+        join(dir, ".ralph", "review-prompt.md"),
         "utf-8",
       );
       expect(prompt).toContain("git diff {{TARGET_BRANCH}}...{{BRANCH}}");
@@ -1363,24 +1262,24 @@ describe("InitService scaffold", () => {
     it.each([
       {
         name: "claude-code",
-        command: `claude "$(cat .sandcastle/SETUP_ISSUE_TRACKER.md)"`,
+        command: `claude "$(cat .ralph/SETUP_ISSUE_TRACKER.md)"`,
       },
       {
         name: "codex",
-        command: `codex "$(cat .sandcastle/SETUP_ISSUE_TRACKER.md)"`,
+        command: `codex "$(cat .ralph/SETUP_ISSUE_TRACKER.md)"`,
       },
       {
         name: "cursor",
-        command: `agent "$(cat .sandcastle/SETUP_ISSUE_TRACKER.md)"`,
+        command: `agent "$(cat .ralph/SETUP_ISSUE_TRACKER.md)"`,
       },
-      { name: "pi", command: `pi "$(cat .sandcastle/SETUP_ISSUE_TRACKER.md)"` },
+      { name: "pi", command: `pi "$(cat .ralph/SETUP_ISSUE_TRACKER.md)"` },
       {
         name: "opencode",
-        command: `opencode --prompt "$(cat .sandcastle/SETUP_ISSUE_TRACKER.md)"`,
+        command: `opencode --prompt "$(cat .ralph/SETUP_ISSUE_TRACKER.md)"`,
       },
       {
         name: "copilot",
-        command: `copilot -i "$(cat .sandcastle/SETUP_ISSUE_TRACKER.md)"`,
+        command: `copilot -i "$(cat .ralph/SETUP_ISSUE_TRACKER.md)"`,
       },
     ])(
       "$name has the expected interactive setupCommand",
@@ -1398,10 +1297,7 @@ describe("InitService scaffold", () => {
         issueTracker: getIssueTracker("github-issues"),
       });
 
-      const prompt = await readFile(
-        join(dir, ".sandcastle", "prompt.md"),
-        "utf-8",
-      );
+      const prompt = await readFile(join(dir, ".ralph", "prompt.md"), "utf-8");
       expect(prompt).toContain("gh issue list");
       expect(prompt).toContain("labels");
       expect(prompt).toContain("comments");
@@ -1417,10 +1313,7 @@ describe("InitService scaffold", () => {
         issueTracker: getIssueTracker("beads"),
       });
 
-      const prompt = await readFile(
-        join(dir, ".sandcastle", "prompt.md"),
-        "utf-8",
-      );
+      const prompt = await readFile(join(dir, ".ralph", "prompt.md"), "utf-8");
       expect(prompt).toContain("bd ready --json");
       expect(prompt).toContain("bd close");
       expect(prompt).not.toContain("gh issue list");
@@ -1429,21 +1322,18 @@ describe("InitService scaffold", () => {
       expect(prompt).not.toContain("{{CLOSE_TASK_COMMAND}}");
     });
 
-    it("simple-loop with beads skips --label Sandcastle (no label to strip)", async () => {
+    it("simple-loop with beads skips --label Ralph (no label to strip)", async () => {
       const dir = await makeDir();
       await runScaffold(dir, {
         templateName: "simple-loop",
         issueTracker: getIssueTracker("beads"),
       });
 
-      const prompt = await readFile(
-        join(dir, ".sandcastle", "prompt.md"),
-        "utf-8",
-      );
-      expect(prompt).not.toContain("--label Sandcastle");
+      const prompt = await readFile(join(dir, ".ralph", "prompt.md"), "utf-8");
+      expect(prompt).not.toContain("--label Ralph");
     });
 
-    it("simple-loop with github-issues retains --label Sandcastle when createLabel is true", async () => {
+    it("simple-loop with github-issues retains --label Ralph when createLabel is true", async () => {
       const dir = await makeDir();
       await runScaffold(dir, {
         templateName: "simple-loop",
@@ -1451,14 +1341,11 @@ describe("InitService scaffold", () => {
         createLabel: true,
       });
 
-      const prompt = await readFile(
-        join(dir, ".sandcastle", "prompt.md"),
-        "utf-8",
-      );
-      expect(prompt).toContain("--label Sandcastle");
+      const prompt = await readFile(join(dir, ".ralph", "prompt.md"), "utf-8");
+      expect(prompt).toContain("--label Ralph");
     });
 
-    it("simple-loop with github-issues strips --label Sandcastle when createLabel is false", async () => {
+    it("simple-loop with github-issues strips --label Ralph when createLabel is false", async () => {
       const dir = await makeDir();
       await runScaffold(dir, {
         templateName: "simple-loop",
@@ -1466,11 +1353,8 @@ describe("InitService scaffold", () => {
         createLabel: false,
       });
 
-      const prompt = await readFile(
-        join(dir, ".sandcastle", "prompt.md"),
-        "utf-8",
-      );
-      expect(prompt).not.toContain("--label Sandcastle");
+      const prompt = await readFile(join(dir, ".ralph", "prompt.md"), "utf-8");
+      expect(prompt).not.toContain("--label Ralph");
       expect(prompt).toContain("gh issue list");
     });
 
@@ -1478,10 +1362,7 @@ describe("InitService scaffold", () => {
       const dir = await makeDir();
       await runScaffold(dir, { templateName: "simple-loop" });
 
-      const prompt = await readFile(
-        join(dir, ".sandcastle", "prompt.md"),
-        "utf-8",
-      );
+      const prompt = await readFile(join(dir, ".ralph", "prompt.md"), "utf-8");
       // Should default to github-issues and replace placeholders
       expect(prompt).toContain("gh issue list");
       expect(prompt).not.toContain("{{LIST_TASKS_COMMAND}}");
@@ -1491,10 +1372,7 @@ describe("InitService scaffold", () => {
       const dir = await makeDir();
       await runScaffold(dir, { templateName: "simple-loop" });
 
-      const prompt = await readFile(
-        join(dir, ".sandcastle", "prompt.md"),
-        "utf-8",
-      );
+      const prompt = await readFile(join(dir, ".ralph", "prompt.md"), "utf-8");
       expect(prompt).not.toContain("GitHub issue");
     });
 
@@ -1502,10 +1380,7 @@ describe("InitService scaffold", () => {
       const dir = await makeDir();
       await runScaffold(dir, { templateName: "simple-loop" });
 
-      const prompt = await readFile(
-        join(dir, ".sandcastle", "prompt.md"),
-        "utf-8",
-      );
+      const prompt = await readFile(join(dir, ".ralph", "prompt.md"), "utf-8");
       expect(prompt).toContain(
         "already been filtered to issues ready for work",
       );
@@ -1517,7 +1392,7 @@ describe("InitService scaffold", () => {
 
     const customManager = getIssueTracker("custom");
 
-    it("custom scaffolds .sandcastle/SETUP_ISSUE_TRACKER.md", async () => {
+    it("custom scaffolds .ralph/SETUP_ISSUE_TRACKER.md", async () => {
       const dir = await makeDir();
       await runScaffold(dir, {
         templateName: "simple-loop",
@@ -1525,7 +1400,7 @@ describe("InitService scaffold", () => {
       });
 
       const setup = await readFile(
-        join(dir, ".sandcastle", "SETUP_ISSUE_TRACKER.md"),
+        join(dir, ".ralph", "SETUP_ISSUE_TRACKER.md"),
         "utf-8",
       );
       // Goal + interview + the three commands the agent must produce.
@@ -1548,11 +1423,11 @@ describe("InitService scaffold", () => {
       });
 
       const setup = await readFile(
-        join(dir, ".sandcastle", "SETUP_ISSUE_TRACKER.md"),
+        join(dir, ".ralph", "SETUP_ISSUE_TRACKER.md"),
         "utf-8",
       );
-      expect(setup).toContain("sandcastle podman build-image");
-      expect(setup).not.toContain("sandcastle docker build-image");
+      expect(setup).toContain("ralph podman build-image");
+      expect(setup).not.toContain("ralph docker build-image");
     });
 
     it("non-custom issue trackers do not scaffold SETUP_ISSUE_TRACKER.md", async () => {
@@ -1564,7 +1439,7 @@ describe("InitService scaffold", () => {
 
       const { access } = await import("node:fs/promises");
       await expect(
-        access(join(dir, ".sandcastle", "SETUP_ISSUE_TRACKER.md")),
+        access(join(dir, ".ralph", "SETUP_ISSUE_TRACKER.md")),
       ).rejects.toThrow();
     });
 
@@ -1576,7 +1451,7 @@ describe("InitService scaffold", () => {
       });
 
       const dockerfile = await readFile(
-        join(dir, ".sandcastle", "Dockerfile"),
+        join(dir, ".ralph", "Dockerfile"),
         "utf-8",
       );
       expect(dockerfile).toContain("TODO");
@@ -1593,10 +1468,7 @@ describe("InitService scaffold", () => {
         issueTracker: customManager,
       });
 
-      const prompt = await readFile(
-        join(dir, ".sandcastle", "prompt.md"),
-        "utf-8",
-      );
+      const prompt = await readFile(join(dir, ".ralph", "prompt.md"), "utf-8");
       expect(prompt).toContain("exit 1");
       expect(prompt).toContain("SETUP_ISSUE_TRACKER.md");
       expect(prompt).not.toContain("{{LIST_TASKS_COMMAND}}");
@@ -1610,7 +1482,7 @@ describe("InitService scaffold", () => {
       });
 
       const envExample = await readFile(
-        join(dir, ".sandcastle", ".env.example"),
+        join(dir, ".ralph", ".env.example"),
         "utf-8",
       );
       expect(envExample).toContain("TODO");
@@ -1627,7 +1499,7 @@ describe("InitService scaffold", () => {
       });
 
       const prompt = await readFile(
-        join(dir, ".sandcastle", "implement-prompt.md"),
+        join(dir, ".ralph", "implement-prompt.md"),
         "utf-8",
       );
       expect(prompt).toContain("gh issue list");
@@ -1646,7 +1518,7 @@ describe("InitService scaffold", () => {
       });
 
       const prompt = await readFile(
-        join(dir, ".sandcastle", "implement-prompt.md"),
+        join(dir, ".ralph", "implement-prompt.md"),
         "utf-8",
       );
       expect(prompt).toContain("bd ready --json");
@@ -1662,7 +1534,7 @@ describe("InitService scaffold", () => {
       await runScaffold(dir, { templateName: "sequential-reviewer" });
 
       const prompt = await readFile(
-        join(dir, ".sandcastle", "implement-prompt.md"),
+        join(dir, ".ralph", "implement-prompt.md"),
         "utf-8",
       );
       expect(prompt).not.toContain("GitHub issue");
@@ -1677,10 +1549,7 @@ describe("InitService scaffold", () => {
         issueTracker: getIssueTracker("github-issues"),
       });
 
-      const prompt = await readFile(
-        join(dir, ".sandcastle", "prompt.md"),
-        "utf-8",
-      );
+      const prompt = await readFile(join(dir, ".ralph", "prompt.md"), "utf-8");
       expect(prompt).toContain("gh issue list");
       expect(prompt).not.toContain("{{LIST_TASKS_COMMAND}}");
     });
@@ -1692,10 +1561,7 @@ describe("InitService scaffold", () => {
         issueTracker: getIssueTracker("beads"),
       });
 
-      const prompt = await readFile(
-        join(dir, ".sandcastle", "prompt.md"),
-        "utf-8",
-      );
+      const prompt = await readFile(join(dir, ".ralph", "prompt.md"), "utf-8");
       expect(prompt).toContain("bd ready --json");
       expect(prompt).not.toContain("gh issue");
       expect(prompt).not.toContain("{{LIST_TASKS_COMMAND}}");
@@ -1711,7 +1577,7 @@ describe("InitService scaffold", () => {
       });
 
       const planPrompt = await readFile(
-        join(dir, ".sandcastle", "plan-prompt.md"),
+        join(dir, ".ralph", "plan-prompt.md"),
         "utf-8",
       );
       expect(planPrompt).toContain("gh issue list");
@@ -1728,7 +1594,7 @@ describe("InitService scaffold", () => {
       });
 
       const planPrompt = await readFile(
-        join(dir, ".sandcastle", "plan-prompt.md"),
+        join(dir, ".ralph", "plan-prompt.md"),
         "utf-8",
       );
       expect(planPrompt).toContain("bd ready --json");
@@ -1742,10 +1608,7 @@ describe("InitService scaffold", () => {
         templateName: "parallel-planner",
       });
 
-      const main = await readFile(
-        join(dir, ".sandcastle", "main.mts"),
-        "utf-8",
-      );
+      const main = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
       expect(main).toContain("id: z.string()");
       expect(main).toContain("TASK_ID: issue.id");
       expect(main).not.toContain("number: number");
@@ -1759,10 +1622,7 @@ describe("InitService scaffold", () => {
         templateName: "parallel-planner",
       });
 
-      const main = await readFile(
-        join(dir, ".sandcastle", "main.mts"),
-        "utf-8",
-      );
+      const main = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
       expect(main).toContain("Output.object");
       expect(main).toContain('tag: "plan"');
       expect(main).toContain("plan.output.issues");
@@ -1778,7 +1638,7 @@ describe("InitService scaffold", () => {
       });
 
       const prompt = await readFile(
-        join(dir, ".sandcastle", "implement-prompt.md"),
+        join(dir, ".ralph", "implement-prompt.md"),
         "utf-8",
       );
       expect(prompt).toContain("{{TASK_ID}}");
@@ -1793,7 +1653,7 @@ describe("InitService scaffold", () => {
       });
 
       const prompt = await readFile(
-        join(dir, ".sandcastle", "implement-prompt.md"),
+        join(dir, ".ralph", "implement-prompt.md"),
         "utf-8",
       );
       expect(prompt).toContain("gh issue view");
@@ -1808,7 +1668,7 @@ describe("InitService scaffold", () => {
       });
 
       const prompt = await readFile(
-        join(dir, ".sandcastle", "implement-prompt.md"),
+        join(dir, ".ralph", "implement-prompt.md"),
         "utf-8",
       );
       expect(prompt).toContain("bd show");
@@ -1824,7 +1684,7 @@ describe("InitService scaffold", () => {
       });
 
       const prompt = await readFile(
-        join(dir, ".sandcastle", "merge-prompt.md"),
+        join(dir, ".ralph", "merge-prompt.md"),
         "utf-8",
       );
       expect(prompt).toContain("gh issue close");
@@ -1839,7 +1699,7 @@ describe("InitService scaffold", () => {
       });
 
       const prompt = await readFile(
-        join(dir, ".sandcastle", "merge-prompt.md"),
+        join(dir, ".ralph", "merge-prompt.md"),
         "utf-8",
       );
       expect(prompt).toContain("bd close");
@@ -1852,7 +1712,7 @@ describe("InitService scaffold", () => {
       await runScaffold(dir, { templateName: "parallel-planner" });
 
       const prompt = await readFile(
-        join(dir, ".sandcastle", "implement-prompt.md"),
+        join(dir, ".ralph", "implement-prompt.md"),
         "utf-8",
       );
       expect(prompt).not.toContain("close the issue when done");
@@ -1866,7 +1726,7 @@ describe("InitService scaffold", () => {
       });
 
       const prompt = await readFile(
-        join(dir, ".sandcastle", "implement-prompt.md"),
+        join(dir, ".ralph", "implement-prompt.md"),
         "utf-8",
       );
       expect(prompt).not.toContain("GitHub issue");
@@ -1882,7 +1742,7 @@ describe("InitService scaffold", () => {
       });
 
       const planPrompt = await readFile(
-        join(dir, ".sandcastle", "plan-prompt.md"),
+        join(dir, ".ralph", "plan-prompt.md"),
         "utf-8",
       );
       expect(planPrompt).toContain("gh issue list");
@@ -1899,7 +1759,7 @@ describe("InitService scaffold", () => {
       });
 
       const planPrompt = await readFile(
-        join(dir, ".sandcastle", "plan-prompt.md"),
+        join(dir, ".ralph", "plan-prompt.md"),
         "utf-8",
       );
       expect(planPrompt).toContain("bd ready --json");
@@ -1913,10 +1773,7 @@ describe("InitService scaffold", () => {
         templateName: "parallel-planner-with-review",
       });
 
-      const main = await readFile(
-        join(dir, ".sandcastle", "main.mts"),
-        "utf-8",
-      );
+      const main = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
       expect(main).toContain("id: z.string()");
       expect(main).toContain("TASK_ID: issue.id");
       expect(main).not.toContain("number: number");
@@ -1930,10 +1787,7 @@ describe("InitService scaffold", () => {
         templateName: "parallel-planner-with-review",
       });
 
-      const main = await readFile(
-        join(dir, ".sandcastle", "main.mts"),
-        "utf-8",
-      );
+      const main = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
       expect(main).toContain("Output.object");
       expect(main).toContain('tag: "plan"');
       expect(main).toContain("plan.output.issues");
@@ -1949,7 +1803,7 @@ describe("InitService scaffold", () => {
       });
 
       const prompt = await readFile(
-        join(dir, ".sandcastle", "implement-prompt.md"),
+        join(dir, ".ralph", "implement-prompt.md"),
         "utf-8",
       );
       expect(prompt).not.toContain("close the issue when done");
@@ -1963,7 +1817,7 @@ describe("InitService scaffold", () => {
       });
 
       const prompt = await readFile(
-        join(dir, ".sandcastle", "implement-prompt.md"),
+        join(dir, ".ralph", "implement-prompt.md"),
         "utf-8",
       );
       expect(prompt).toContain("{{TASK_ID}}");
@@ -1978,7 +1832,7 @@ describe("InitService scaffold", () => {
       });
 
       const prompt = await readFile(
-        join(dir, ".sandcastle", "implement-prompt.md"),
+        join(dir, ".ralph", "implement-prompt.md"),
         "utf-8",
       );
       expect(prompt).toContain("gh issue view");
@@ -1993,7 +1847,7 @@ describe("InitService scaffold", () => {
       });
 
       const prompt = await readFile(
-        join(dir, ".sandcastle", "implement-prompt.md"),
+        join(dir, ".ralph", "implement-prompt.md"),
         "utf-8",
       );
       expect(prompt).toContain("bd show");
@@ -2009,7 +1863,7 @@ describe("InitService scaffold", () => {
       });
 
       const prompt = await readFile(
-        join(dir, ".sandcastle", "merge-prompt.md"),
+        join(dir, ".ralph", "merge-prompt.md"),
         "utf-8",
       );
       expect(prompt).toContain("gh issue close");
@@ -2024,7 +1878,7 @@ describe("InitService scaffold", () => {
       });
 
       const prompt = await readFile(
-        join(dir, ".sandcastle", "merge-prompt.md"),
+        join(dir, ".ralph", "merge-prompt.md"),
         "utf-8",
       );
       expect(prompt).toContain("bd close");
@@ -2039,7 +1893,7 @@ describe("InitService scaffold", () => {
       });
 
       const prompt = await readFile(
-        join(dir, ".sandcastle", "implement-prompt.md"),
+        join(dir, ".ralph", "implement-prompt.md"),
         "utf-8",
       );
       expect(prompt).not.toContain("GitHub issue");
@@ -2054,7 +1908,7 @@ describe("InitService scaffold", () => {
       });
 
       const dockerfile = await readFile(
-        join(dir, ".sandcastle", "Dockerfile"),
+        join(dir, ".ralph", "Dockerfile"),
         "utf-8",
       );
       expect(dockerfile).toContain("GitHub CLI");
@@ -2069,7 +1923,7 @@ describe("InitService scaffold", () => {
       });
 
       const dockerfile = await readFile(
-        join(dir, ".sandcastle", "Dockerfile"),
+        join(dir, ".ralph", "Dockerfile"),
         "utf-8",
       );
       expect(dockerfile).toContain("beads");
@@ -2090,7 +1944,7 @@ describe("InitService scaffold", () => {
       });
 
       const containerfile = await readFile(
-        join(dir, ".sandcastle", "Containerfile"),
+        join(dir, ".ralph", "Containerfile"),
         "utf-8",
       );
       expect(containerfile).toContain("beads");
@@ -2110,7 +1964,7 @@ describe("InitService scaffold", () => {
       });
 
       const dockerfile = await readFile(
-        join(dir, ".sandcastle", "Dockerfile"),
+        join(dir, ".ralph", "Dockerfile"),
         "utf-8",
       );
       expect(dockerfile).toContain("beads");
@@ -2129,7 +1983,7 @@ describe("InitService scaffold", () => {
       expect(result.mainFilename).toBe("main.mts");
       const { access } = await import("node:fs/promises");
       await expect(
-        access(join(dir, ".sandcastle", "main.mts")),
+        access(join(dir, ".ralph", "main.mts")),
       ).resolves.toBeUndefined();
     });
 
@@ -2143,10 +1997,10 @@ describe("InitService scaffold", () => {
 
       expect(result.mainFilename).toBe("main.mts");
       const mainContent = await readFile(
-        join(dir, ".sandcastle", "main.mts"),
+        join(dir, ".ralph", "main.mts"),
         "utf-8",
       );
-      expect(mainContent).toContain("@ai-hero/sandcastle");
+      expect(mainContent).toContain("@mauricioliu/ralph");
     });
 
     it("scaffolds main.mts when package.json has type: commonjs", async () => {
@@ -2171,12 +2025,10 @@ describe("InitService scaffold", () => {
       expect(result.mainFilename).toBe("main.ts");
       const { access } = await import("node:fs/promises");
       await expect(
-        access(join(dir, ".sandcastle", "main.ts")),
+        access(join(dir, ".ralph", "main.ts")),
       ).resolves.toBeUndefined();
       // main.mts should NOT exist
-      await expect(
-        access(join(dir, ".sandcastle", "main.mts")),
-      ).rejects.toThrow();
+      await expect(access(join(dir, ".ralph", "main.mts"))).rejects.toThrow();
     });
 
     it("main.ts scaffolded with type: module has correct imports and factory calls", async () => {
@@ -2188,10 +2040,10 @@ describe("InitService scaffold", () => {
       await runScaffold(dir);
 
       const mainContent = await readFile(
-        join(dir, ".sandcastle", "main.ts"),
+        join(dir, ".ralph", "main.ts"),
         "utf-8",
       );
-      expect(mainContent).toContain("@ai-hero/sandcastle");
+      expect(mainContent).toContain("@mauricioliu/ralph");
       expect(mainContent).toContain('claudeCode("claude-opus-4-7")');
     });
 
@@ -2204,7 +2056,7 @@ describe("InitService scaffold", () => {
       await runScaffold(dir, { agent: piAgent, model: "claude-sonnet-4-6" });
 
       const mainContent = await readFile(
-        join(dir, ".sandcastle", "main.ts"),
+        join(dir, ".ralph", "main.ts"),
         "utf-8",
       );
       expect(mainContent).toContain('pi("claude-sonnet-4-6")');
@@ -2220,7 +2072,7 @@ describe("InitService scaffold", () => {
       await runScaffold(dir);
 
       const mainContent = await readFile(
-        join(dir, ".sandcastle", "main.ts"),
+        join(dir, ".ralph", "main.ts"),
         "utf-8",
       );
       expect(mainContent).not.toContain("main.mts");
@@ -2244,24 +2096,24 @@ describe("InitService scaffold", () => {
     const dockerProvider = getSandboxProvider("docker")!;
     const podmanProvider = getSandboxProvider("podman")!;
 
-    it("selecting docker writes Dockerfile to .sandcastle/", async () => {
+    it("selecting docker writes Dockerfile to .ralph/", async () => {
       const dir = await makeDir();
       await runScaffold(dir, { sandboxProvider: dockerProvider });
 
       const dockerfile = await readFile(
-        join(dir, ".sandcastle", "Dockerfile"),
+        join(dir, ".ralph", "Dockerfile"),
         "utf-8",
       );
       expect(dockerfile).toContain("FROM node:22-bookworm");
       expect(dockerfile).not.toContain("{{ISSUE_TRACKER_TOOLS}}");
     });
 
-    it("selecting podman writes Containerfile to .sandcastle/", async () => {
+    it("selecting podman writes Containerfile to .ralph/", async () => {
       const dir = await makeDir();
       await runScaffold(dir, { sandboxProvider: podmanProvider });
 
       const containerfile = await readFile(
-        join(dir, ".sandcastle", "Containerfile"),
+        join(dir, ".ralph", "Containerfile"),
         "utf-8",
       );
       expect(containerfile).toContain("FROM node:22-bookworm");
@@ -2273,9 +2125,7 @@ describe("InitService scaffold", () => {
       await runScaffold(dir, { sandboxProvider: podmanProvider });
 
       const { access } = await import("node:fs/promises");
-      await expect(
-        access(join(dir, ".sandcastle", "Dockerfile")),
-      ).rejects.toThrow();
+      await expect(access(join(dir, ".ralph", "Dockerfile"))).rejects.toThrow();
     });
 
     it("selecting docker does not write Containerfile", async () => {
@@ -2284,7 +2134,7 @@ describe("InitService scaffold", () => {
 
       const { access } = await import("node:fs/promises");
       await expect(
-        access(join(dir, ".sandcastle", "Containerfile")),
+        access(join(dir, ".ralph", "Containerfile")),
       ).rejects.toThrow();
     });
 
@@ -2292,12 +2142,9 @@ describe("InitService scaffold", () => {
       const dir = await makeDir();
       await runScaffold(dir, { sandboxProvider: podmanProvider });
 
-      const mainTs = await readFile(
-        join(dir, ".sandcastle", "main.mts"),
-        "utf-8",
-      );
+      const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
       expect(mainTs).toContain(
-        'import { podman } from "@ai-hero/sandcastle/sandboxes/podman"',
+        'import { podman } from "@mauricioliu/ralph/sandboxes/podman"',
       );
       expect(mainTs).toContain("sandbox: podman()");
       expect(mainTs).not.toContain("docker");
@@ -2310,10 +2157,7 @@ describe("InitService scaffold", () => {
         templateName: "parallel-planner",
       });
 
-      const mainTs = await readFile(
-        join(dir, ".sandcastle", "main.mts"),
-        "utf-8",
-      );
+      const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
       expect(mainTs).not.toContain("docker");
       // parallel-planner calls the factory three times
       expect(mainTs.match(/sandbox: podman\(\)/g)).toHaveLength(3);
@@ -2323,15 +2167,12 @@ describe("InitService scaffold", () => {
       const dir = await makeDir();
       await runScaffold(dir, { sandboxProvider: dockerProvider });
 
-      const mainTs = await readFile(
-        join(dir, ".sandcastle", "main.mts"),
-        "utf-8",
+      const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
+      expect(mainTs).toContain(
+        'import { run, claudeCode } from "@mauricioliu/ralph"',
       );
       expect(mainTs).toContain(
-        'import { run, claudeCode } from "@ai-hero/sandcastle"',
-      );
-      expect(mainTs).toContain(
-        'import { docker } from "@ai-hero/sandcastle/sandboxes/docker"',
+        'import { docker } from "@mauricioliu/ralph/sandboxes/docker"',
       );
       expect(mainTs).toContain("sandbox: docker()");
     });
