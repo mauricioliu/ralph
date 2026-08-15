@@ -291,7 +291,12 @@ export interface AgentProvider {
   parseSessionUsage?(content: string): IterationUsage | undefined;
 }
 
-export const DEFAULT_MODEL = "claude-opus-4-7";
+/**
+ * The generic default model — pi's worker model (`zai-coding-cn/glm-5.3:high`),
+ * since a lone agent is a worker. The planner role defaults to
+ * `openai-codex/gpt-5.6-terra:high` in the scaffold templates (ADR 0021).
+ */
+export const DEFAULT_MODEL = "zai-coding-cn/glm-5.3:high";
 
 // ---------------------------------------------------------------------------
 // Session storage helpers — file I/O lives here so callers (Orchestrator,

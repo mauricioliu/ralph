@@ -23,7 +23,6 @@ import {
   codex as codexFactory,
   opencode as opencodeFactory,
   pi as piFactory,
-  DEFAULT_MODEL,
 } from "./AgentProvider.js";
 import type { SandboxService } from "./SandboxFactory.js";
 import type { DockerError, SandboxError } from "./errors.js";
@@ -1787,7 +1786,7 @@ describe("Orchestrator streaming", () => {
 
     await Effect.runPromise(
       orchestrate({
-        provider: claudeCode(DEFAULT_MODEL),
+        provider: claudeCode("claude-opus-4-7"),
         hostRepoDir: hostDir,
 
         iterations: 1,
@@ -1795,7 +1794,7 @@ describe("Orchestrator streaming", () => {
       }).pipe(Effect.provide(Layer.merge(factoryLayer, testDisplayLayer))),
     );
 
-    expect(capturedCommand).toContain(`--model '${DEFAULT_MODEL}'`);
+    expect(capturedCommand).toContain(`--model 'claude-opus-4-7'`);
   });
 
   it("uses the model from a custom provider", async () => {
@@ -1846,7 +1845,7 @@ describe("Orchestrator streaming", () => {
     );
 
     expect(capturedCommand).toContain("--model 'claude-sonnet-4-6'");
-    expect(capturedCommand).not.toContain(DEFAULT_MODEL);
+    expect(capturedCommand).not.toContain("claude-opus-4-7");
   });
 });
 

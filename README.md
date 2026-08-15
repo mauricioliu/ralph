@@ -33,13 +33,13 @@ Ralph is provider-agnostic — it ships with built-in providers for Docker, Podm
 npm install --save-dev @mauricioliu/ralph
 ```
 
-2. Run `npx @mauricioliu/ralph init`. This scaffolds a `.ralph` directory with all the files needed.
+2. Run `npx @mauricioliu/ralph init`. This scaffolds a `.ralph` directory with all the files needed. The agent picker preselects **pi**, Ralph's default harness.
 
 ```bash
 npx @mauricioliu/ralph init
 ```
 
-3. Edit `.ralph/.env` and fill in your default values for `ANTHROPIC_API_KEY`. If you want to use your Claude subscription instead of an API key, see [#191](https://github.com/mattpocock/sandcastle/issues/191).
+3. No API key is needed on the default path: pi authenticates from your host login, and Ralph transfers the host's `~/.pi/agent/auth.json` into the sandbox for you (see [Credential transfer](#credential-transfer)). Only if you picked an API-key agent during init (e.g. Claude Code), copy the example and fill in its key — to use a Claude subscription instead of an API key, see [#191](https://github.com/mattpocock/sandcastle/issues/191).
 
 ```bash
 cp .ralph/.env.example .ralph/.env
@@ -53,11 +53,13 @@ npx tsx .ralph/main.ts
 
 ```typescript
 // 3. Run the agent via the JS API
-import { run, claudeCode } from "@mauricioliu/ralph";
+import { run, pi } from "@mauricioliu/ralph";
 import { docker } from "@mauricioliu/ralph/sandboxes/docker";
 
 await run({
-  agent: claudeCode("claude-opus-4-7"),
+  // pi is the default harness. This is the worker model; the planner
+  // default is openai-codex/gpt-5.6-terra:high.
+  agent: pi("zai-coding-cn/glm-5.3:high"),
   sandbox: docker(), // or podman(), vercel(), or your own provider
   promptFile: ".ralph/prompt.md",
 });
@@ -77,6 +79,7 @@ Ralph uses a `SandboxProvider` to create isolated environments. The `sandbox` op
 Worktree methods (`wt.run()`, `wt.interactive()`, `wt.createSandbox()`) accept the same providers as their top-level counterparts. `wt.interactive()` defaults to `noSandbox()` when no sandbox is specified.
 
 ```typescript
+import { pi } from "@mauricioliu/ralph";
 import { docker } from "@mauricioliu/ralph/sandboxes/docker";
 import { podman } from "@mauricioliu/ralph/sandboxes/podman";
 import { vercel } from "@mauricioliu/ralph/sandboxes/vercel";
@@ -84,7 +87,7 @@ import { noSandbox } from "@mauricioliu/ralph/sandboxes/no-sandbox";
 
 // Docker, Podman, and Vercel are interchangeable in run() and createSandbox():
 await run({
-  agent: claudeCode("claude-opus-4-7"),
+  agent: pi("zai-coding-cn/glm-5.3:high"),
   sandbox: docker(),
   prompt: "...",
 });
@@ -92,7 +95,7 @@ await run({
 // No-sandbox runs the agent directly on the host — accepted by run(),
 // createSandbox(), and interactive(). Skips container isolation entirely:
 await interactive({
-  agent: claudeCode("claude-opus-4-7"),
+  agent: pi("zai-coding-cn/glm-5.3:high"),
   sandbox: noSandbox(),
   prompt: "...", // optional — omit to launch the TUI with no initial prompt
   cwd: "/path/to/other-repo", // optional — defaults to process.cwd()
@@ -106,11 +109,11 @@ You can also [create your own provider](#custom-sandbox-providers) using `create
 Ralph exports a programmatic `run()` function for use in scripts, CI pipelines, or custom tooling. The examples below use `docker()`, but any `SandboxProvider` works in its place.
 
 ```typescript
-import { run, claudeCode } from "@mauricioliu/ralph";
+import { run, pi } from "@mauricioliu/ralph";
 import { docker } from "@mauricioliu/ralph/sandboxes/docker";
 
 const result = await run({
-  agent: claudeCode("claude-opus-4-7"),
+  agent: pi("zai-coding-cn/glm-5.3:high"),
   sandbox: docker(),
   promptFile: ".ralph/prompt.md",
 });
@@ -124,13 +127,13 @@ console.log(result.branch); // target branch name
 ### All options
 
 ```typescript
-import { run, claudeCode } from "@mauricioliu/ralph";
+import { run, pi } from "@mauricioliu/ralph";
 import { docker } from "@mauricioliu/ralph/sandboxes/docker";
 
 const result = await run({
-  // Agent provider — required. Pass a model string to claudeCode().
-  // Optional second arg for provider-specific options like effort level.
-  agent: claudeCode("claude-opus-4-7", { effort: "high" }),
+  // Agent provider — required. Pass a model string to pi().
+  // Optional second arg for provider-specific options like thinking level.
+  agent: pi("zai-coding-cn/glm-5.3:high"),
 
   // Sandbox provider — required. Any SandboxProvider works (docker, podman, vercel, or custom).
   // Provider-specific config (like imageName, mounts) lives inside the provider factory call.
@@ -261,7 +264,7 @@ Use `run()` instead when you only need a single one-shot invocation — it handl
 #### Basic single-run usage
 
 ```typescript
-import { createSandbox, claudeCode } from "@mauricioliu/ralph";
+import { createSandbox, pi } from "@mauricioliu/ralph";
 import { docker } from "@mauricioliu/ralph/sandboxes/docker";
 
 await using sandbox = await createSandbox({
@@ -270,7 +273,7 @@ await using sandbox = await createSandbox({
 });
 
 const result = await sandbox.run({
-  agent: claudeCode("claude-opus-4-7"),
+  agent: pi("zai-coding-cn/glm-5.3:high"),
   prompt: "Fix issue #42 in this repo.",
 });
 
@@ -280,7 +283,7 @@ console.log(result.commits); // [{ sha: "abc123" }]
 #### Multi-run implement-then-review
 
 ```typescript
-import { createSandbox, claudeCode } from "@mauricioliu/ralph";
+import { createSandbox, pi } from "@mauricioliu/ralph";
 import { docker } from "@mauricioliu/ralph/sandboxes/docker";
 
 await using sandbox = await createSandbox({
@@ -291,14 +294,15 @@ await using sandbox = await createSandbox({
 
 // Step 1: implement
 const implResult = await sandbox.run({
-  agent: claudeCode("claude-opus-4-7"),
+  agent: pi("zai-coding-cn/glm-5.3:high"),
   promptFile: ".ralph/implement.md",
   maxIterations: 5,
 });
 
-// Step 2: review on the same branch, same container
+// Step 2: review on the same branch, same container — the reviewer role
+// also runs the worker model; pass any model string to change it
 const reviewResult = await sandbox.run({
-  agent: claudeCode("claude-sonnet-4-6"),
+  agent: pi("zai-coding-cn/glm-5.3:high"),
   prompt: "Review the changes and fix any issues.",
 });
 ```
@@ -349,7 +353,7 @@ if (closeResult.preservedWorktreePath) {
 
 | Option                     | Type               | Default                       | Description                                                                          |
 | -------------------------- | ------------------ | ----------------------------- | ------------------------------------------------------------------------------------ |
-| `agent`                    | AgentProvider      | —                             | **Required.** Agent provider (e.g. `claudeCode("claude-opus-4-7")`)                  |
+| `agent`                    | AgentProvider      | —                             | **Required.** Agent provider (e.g. `pi("zai-coding-cn/glm-5.3:high")`)               |
 | `prompt`                   | string             | —                             | Inline prompt (mutually exclusive with `promptFile`)                                 |
 | `promptFile`               | string             | —                             | Path to prompt file (mutually exclusive with `prompt`)                               |
 | `promptArgs`               | PromptArgs         | —                             | Key-value map for `{{KEY}}` placeholder substitution                                 |
@@ -399,13 +403,13 @@ console.log(wt.branch); // "agent/fix-42"
 
 // Run an interactive session in the worktree (defaults to noSandbox)
 await wt.interactive({
-  agent: claudeCode("claude-opus-4-7"),
+  agent: pi("zai-coding-cn/glm-5.3:high"),
   prompt: "Explore the codebase and understand the bug.",
 });
 
 // Run an AFK agent in the worktree (sandbox is required)
 const result = await wt.run({
-  agent: claudeCode("claude-opus-4-7"),
+  agent: pi("zai-coding-cn/glm-5.3:high"),
   sandbox: docker({ imageName: "ralph:myrepo" }),
   prompt: "Fix issue #42.",
   maxIterations: 3,
@@ -646,12 +650,12 @@ This is independent of `idleTimeoutSeconds`. They cover different phases: `idleT
 Use `Output.object()` to extract a typed, schema-validated JSON payload from the agent's stdout. The agent emits its answer inside an XML tag you specify, and Ralph parses, validates, and returns it on `result.output`. The schema can be any [Standard Schema](https://standardschema.dev) validator — the examples below use [Zod](https://zod.dev), but Valibot, ArkType, and others work identically. See [ADR 0010](docs/adr/0010-structured-output.md) for design rationale.
 
 ```ts
-import { run, Output, claudeCode } from "@mauricioliu/ralph";
+import { run, Output, pi } from "@mauricioliu/ralph";
 import { docker } from "@mauricioliu/ralph/sandboxes/docker";
 import { z } from "zod";
 
 const result = await run({
-  agent: claudeCode("claude-opus-4-7"),
+  agent: pi("zai-coding-cn/glm-5.3:high"),
   sandbox: docker(),
   prompt: `Analyze the code, and output the result as JSON inside <result> tags.
     The result must match this schema:
@@ -775,7 +779,7 @@ Removes the Podman image.
 
 | Option                     | Type               | Default                       | Description                                                                                                                                                                                                                  |
 | -------------------------- | ------------------ | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `agent`                    | AgentProvider      | —                             | **Required.** Agent provider (e.g. `claudeCode("claude-opus-4-7")`, `pi("claude-sonnet-4-6")`, `codex("gpt-5.4")`, `cursor("composer-2")`, `opencode("opencode/big-pickle")`, `copilot("claude-sonnet-4.5")`)                |
+| `agent`                    | AgentProvider      | —                             | **Required.** Agent provider (e.g. `pi("zai-coding-cn/glm-5.3:high")`, `claudeCode("claude-opus-4-7")`, `codex("gpt-5.4")`, `cursor("composer-2")`, `opencode("opencode/big-pickle")`, `copilot("claude-sonnet-4.5")`)       |
 | `sandbox`                  | SandboxProvider    | —                             | **Required.** Sandbox provider (e.g. `docker()`, `podman()`, `docker({ imageName: "ralph:local" })`)                                                                                                                         |
 | `cwd`                      | string             | `process.cwd()`               | Host repo directory — anchor for `.ralph/` artifacts and git operations. Relative paths resolve against `process.cwd()`.                                                                                                     |
 | `prompt`                   | string             | —                             | Inline prompt (mutually exclusive with `promptFile`)                                                                                                                                                                         |
@@ -840,7 +844,7 @@ Pass `resumeSession` to `run()` to continue a prior Claude Code, Codex, or Pi co
 
 ```typescript
 const result = await run({
-  agent: claudeCode("claude-opus-4-7"),
+  agent: pi("zai-coding-cn/glm-5.3:high"),
   sandbox: docker(),
   prompt: "Continue where you left off",
   resumeSession: "abc-123-def",
@@ -878,7 +882,7 @@ Fork enables fan-out workflows where a single parent run is the starting point f
 
 ```typescript
 const parent = await run({
-  agent: claudeCode("claude-opus-4-7"),
+  agent: pi("zai-coding-cn/glm-5.3:high"),
   sandbox: docker(),
   prompt: "Read the codebase and summarise the data model",
 });
@@ -932,7 +936,7 @@ agent: codex("gpt-5.4", { effort: "high" });
 The `pi()` factory accepts an optional second argument for provider-specific options:
 
 ```typescript
-agent: pi("claude-sonnet-4-6", { thinking: "high" });
+agent: pi("zai-coding-cn/glm-5.3", { thinking: "high" });
 ```
 
 | Option            | Type                                                                     | Default | Description                                                                                                                                                       |
@@ -1224,24 +1228,24 @@ A branch strategy controls where the agent's commits land. Configure it when con
 Branch strategy is now configured on `run()`, not on the provider:
 
 ```typescript
-import { run, claudeCode } from "@mauricioliu/ralph";
+import { run, pi } from "@mauricioliu/ralph";
 import { docker } from "@mauricioliu/ralph/sandboxes/docker";
 
 // head — direct write, bind-mount only (default for bind-mount providers)
 await run({
-  agent: claudeCode("claude-opus-4-7"),
+  agent: pi("zai-coding-cn/glm-5.3:high"),
   sandbox: docker(),
   prompt: "…",
 });
 // merge-to-head — temp branch, merge back (default for isolated providers)
 await run({
-  agent: claudeCode("claude-opus-4-7"),
+  agent: pi("zai-coding-cn/glm-5.3:high"),
   sandbox: tempDir(),
   prompt: "…",
 });
 // branch — explicit named branch
 await run({
-  agent: claudeCode("claude-opus-4-7"),
+  agent: pi("zai-coding-cn/glm-5.3:high"),
   sandbox: docker(),
   branchStrategy: { type: "branch", branch: "agent/fix-42" },
   prompt: "…",
@@ -1253,10 +1257,10 @@ await run({
 Pass your custom provider via the `sandbox` option — it works the same as the built-in `docker()` provider:
 
 ```typescript
-import { run, claudeCode } from "@mauricioliu/ralph";
+import { run, pi } from "@mauricioliu/ralph";
 
 const result = await run({
-  agent: claudeCode("claude-opus-4-7"),
+  agent: pi("zai-coding-cn/glm-5.3:high"),
   sandbox: localProcess(), // your custom provider
   prompt: "Fix issue #42 in this repo.",
 });
@@ -1279,20 +1283,20 @@ All per-repo sandbox configuration lives in `.ralph/`. Run `ralph init` to creat
 
 ### Custom Dockerfile
 
-The `.ralph/Dockerfile` controls the sandbox environment. The default template installs:
+The `.ralph/Dockerfile` controls the sandbox environment. The default template — scaffolded for the default pi agent — installs:
 
 - **Node.js 22** (base image)
 - **git**, **curl**, **jq** (system dependencies)
 - **GitHub CLI** (`gh`)
-- **Claude Code CLI**
-- A non-root `agent` user (required — Claude runs as this user)
+- **Pi coding agent** (`@earendil-works/pi-coding-agent`)
+- A non-root `agent` user (required — the agent runs as this user)
 
 When customizing the Dockerfile, ensure you keep:
 
-- A non-root user (the default `agent` user) for Claude to run as
+- A non-root user (the default `agent` user) for the agent to run as
 - `git` (required for commits and branch operations)
 - `gh` (required for issue fetching)
-- Claude Code CLI installed and on PATH
+- Your agent's CLI installed and on PATH — pi for the default template; the selected agent's CLI (Claude Code, Codex, …) if you chose a different one during init
 
 Add your project-specific dependencies (e.g., language runtimes, build tools) to the Dockerfile as needed.
 

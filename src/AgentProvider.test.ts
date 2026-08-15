@@ -7,6 +7,7 @@ import {
   codex,
   copilot,
   cursor,
+  DEFAULT_MODEL,
   minimax,
   opencode,
   pi,
@@ -18,6 +19,12 @@ import type { BindMountSandboxHandle } from "./SandboxProvider.js";
 const opts = (prompt: string): AgentCommandOptions => ({
   prompt,
   dangerouslySkipPermissions: true,
+});
+
+describe("DEFAULT_MODEL", () => {
+  it("points at pi's worker model (ADR 0021)", () => {
+    expect(DEFAULT_MODEL).toBe("zai-coding-cn/glm-5.3:high");
+  });
 });
 
 describe("claudeCode factory", () => {
