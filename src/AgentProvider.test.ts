@@ -1,4 +1,12 @@
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { exec as nodeExec } from "node:child_process";
+import {
+  copyFile,
+  mkdtemp,
+  mkdir,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, posix } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -2509,9 +2517,8 @@ describe("pi credential provisioning (provisionCredentials)", () => {
   const fsHandle = (): BindMountSandboxHandle => ({
     worktreePath: "/workspace",
     exec: async (command) => {
-      const { exec } = await import("node:child_process");
       return new Promise((resolve) => {
-        exec(command, (err, stdout, stderr) => {
+        nodeExec(command, (err, stdout, stderr) => {
           resolve({
             stdout: stdout.toString(),
             stderr: stderr.toString(),
@@ -2521,11 +2528,9 @@ describe("pi credential provisioning (provisionCredentials)", () => {
       });
     },
     copyFileIn: async (hostPath, sandboxPath) => {
-      const { copyFile } = await import("node:fs/promises");
       await copyFile(hostPath, sandboxPath);
     },
     copyFileOut: async (sandboxPath, hostPath) => {
-      const { copyFile } = await import("node:fs/promises");
       await copyFile(sandboxPath, hostPath);
     },
     close: async () => {},

@@ -4083,7 +4083,6 @@ describe("pi credential provisioning integration", () => {
             const handle: BindMountSandboxHandle = {
               worktreePath: sandboxBaseDir,
               exec: async (command) => {
-                const { exec } = await import("node:child_process");
                 return new Promise((resolve) => {
                   exec(command, (err, stdout, stderr) => {
                     resolve({
