@@ -7,6 +7,10 @@ import {
   findPiSessionOnHost,
   locateCodexHostSession,
   locatePiHostSession,
+  piHostAgentDir,
+  piHostAuthPath,
+  piHostModelsStorePath,
+  piSandboxAgentDir,
   piSessionDirPath,
   transferClaudeSession,
   transferCodexSession,
@@ -296,6 +300,35 @@ describe("piSessionDirPath", () => {
   it("joins the sessions root with the encoded cwd directory", () => {
     expect(piSessionDirPath("/host/repo", "/tmp/pi-sessions")).toBe(
       join("/tmp/pi-sessions", "--host-repo--"),
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Pi credential paths (auth.json / models-store.json)
+// ---------------------------------------------------------------------------
+
+describe("pi credential paths", () => {
+  it("piHostAgentDir defaults to ~/.pi/agent and honors an override", () => {
+    expect(piHostAgentDir("/custom/agent-dir")).toBe("/custom/agent-dir");
+    expect(piHostAgentDir()).toBe(
+      join(process.env.HOME ?? "~", ".pi", "agent"),
+    );
+  });
+
+  it("piHostAuthPath and piHostModelsStorePath join the credential filenames onto the agent dir", () => {
+    expect(piHostAuthPath("/custom/agent-dir")).toBe(
+      join("/custom/agent-dir", "auth.json"),
+    );
+    expect(piHostModelsStorePath("/custom/agent-dir")).toBe(
+      join("/custom/agent-dir", "models-store.json"),
+    );
+  });
+
+  it("piSandboxAgentDir defaults to the sandbox home's .pi/agent and honors an override", () => {
+    expect(piSandboxAgentDir()).toBe("/home/agent/.pi/agent");
+    expect(piSandboxAgentDir("/custom/sb-agent-dir")).toBe(
+      "/custom/sb-agent-dir",
     );
   });
 });

@@ -2492,3 +2492,141 @@ describe("sessionStorage", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// pi credential provisioning — host auth.json / models-store.json into sandbox
+// ---------------------------------------------------------------------------
+
+describe("pi credential provisioning (provisionCredentials)", () => {
+  /** Bind-mount handle backed by the host filesystem (sandbox path == host path). */
+  const fsHandle = (): BindMountSandboxHandle => ({
+    worktreePath: "/workspace",
+    exec: async (command) => {
+      const { exec } = await import("node:child_process");
+      return new Promise((resolve) => {
+        exec(command, (err, stdout, stderr) => {
+          resolve({
+            stdout: stdout.toString(),
+            stderr: stderr.toString(),
+            exitCode: err && typeof err.code === "number" ? err.code : 0,
+          });
+        });
+      });
+    },
+    copyFileIn: async (hostPath, sandboxPath) => {
+      const { copyFile } = await import("node:fs/promises");
+      await copyFile(hostPath, sandboxPath);
+    },
+    copyFileOut: async (sandboxPath, hostPath) => {
+      const { copyFile } = await import("node:fs/promises");
+      await copyFile(sandboxPath, hostPath);
+    },
+    close: async () => {},
+  });
+
+  it("transfers host auth.json and models-store.json into the sandbox agent dir", async () => {
+    const hostAgentDir = await mkdtemp(join(tmpdir(), "ralph-pi-cred-host-"));
+    const sandboxBase = await mkdtemp(join(tmpdir(), "ralph-pi-cred-sbx-"));
+    // The sandbox agent dir does not exist yet — the provisioner must mkdir -p it.
+    const sandboxAgentDir = join(sandboxBase, ".pi", "agent");
+    try {
+      const authContent = JSON.stringify({
+        "openai-codex": { type: "oauth", access: "token-abc" },
+      });
+      const modelsContent = JSON.stringify({ models: [] });
+      await writeFile(join(hostAgentDir, "auth.json"), authContent);
+      await writeFile(join(hostAgentDir, "models-store.json"), modelsContent);
+
+      const provider = pi("openai-codex/gpt-5.6-terra", {
+        credentials: { hostAgentDir, sandboxAgentDir },
+      });
+      expect(provider.provisionCredentials).toBeDefined();
+
+      await provider.provisionCredentials!({ handle: fsHandle() });
+
+      expect(await readFile(join(sandboxAgentDir, "auth.json"), "utf-8")).toBe(
+        authContent,
+      );
+      expect(
+        await readFile(join(sandboxAgentDir, "models-store.json"), "utf-8"),
+      ).toBe(modelsContent);
+
+      // Host copy remains authoritative — unchanged by the transfer.
+      expect(await readFile(join(hostAgentDir, "auth.json"), "utf-8")).toBe(
+        authContent,
+      );
+      expect(
+        await readFile(join(hostAgentDir, "models-store.json"), "utf-8"),
+      ).toBe(modelsContent);
+    } finally {
+      await rm(hostAgentDir, { recursive: true, force: true });
+      await rm(sandboxBase, { recursive: true, force: true });
+    }
+  });
+
+  it("throws a typed error naming the missing host auth.json", async () => {
+    const hostAgentDir = await mkdtemp(join(tmpdir(), "ralph-pi-cred-miss-"));
+    const sandboxAgentDir = await mkdtemp(
+      join(tmpdir(), "ralph-pi-cred-miss2-"),
+    );
+    try {
+      // No auth.json on the host.
+      const provider = pi("zai-coding-cn/glm-5.3", {
+        credentials: { hostAgentDir, sandboxAgentDir },
+      });
+
+      const expectedPath = join(hostAgentDir, "auth.json");
+      await expect(
+        provider.provisionCredentials!({ handle: fsHandle() }),
+      ).rejects.toMatchObject({
+        _tag: "CredentialProvisionError",
+        hostPath: expectedPath,
+      });
+      // And the message names the missing host file too.
+      await expect(
+        provider.provisionCredentials!({ handle: fsHandle() }),
+      ).rejects.toThrow(expectedPath);
+    } finally {
+      await rm(hostAgentDir, { recursive: true, force: true });
+      await rm(sandboxAgentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips models-store.json when absent on the host", async () => {
+    const hostAgentDir = await mkdtemp(join(tmpdir(), "ralph-pi-cred-nores-"));
+    const sandboxAgentDir = await mkdtemp(
+      join(tmpdir(), "ralph-pi-cred-nores2-"),
+    );
+    try {
+      await writeFile(
+        join(hostAgentDir, "auth.json"),
+        JSON.stringify({ "zai-coding-cn": { type: "oauth" } }),
+      );
+
+      const provider = pi("zai-coding-cn/glm-5.3", {
+        credentials: { hostAgentDir, sandboxAgentDir },
+      });
+
+      // Resolves without error despite the missing catalog cache…
+      await provider.provisionCredentials!({ handle: fsHandle() });
+
+      // …and auth.json still landed in the sandbox.
+      expect(await readFile(join(sandboxAgentDir, "auth.json"), "utf-8")).toBe(
+        JSON.stringify({ "zai-coding-cn": { type: "oauth" } }),
+      );
+    } finally {
+      await rm(hostAgentDir, { recursive: true, force: true });
+      await rm(sandboxAgentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("is only defined on the pi provider", () => {
+    expect(pi("m").provisionCredentials).toBeInstanceOf(Function);
+    expect(claudeCode("m").provisionCredentials).toBeUndefined();
+    expect(codex("m").provisionCredentials).toBeUndefined();
+    expect(cursor("m").provisionCredentials).toBeUndefined();
+    expect(opencode("m").provisionCredentials).toBeUndefined();
+    expect(copilot("m").provisionCredentials).toBeUndefined();
+    expect(minimax("m").provisionCredentials).toBeUndefined();
+  });
+});

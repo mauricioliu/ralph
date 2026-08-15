@@ -248,6 +248,29 @@ export const piSessionDirPath = (cwd: string, sessionsDir?: string): string => {
   return join(base, encodePiSessionDir(cwd));
 };
 
+// ---------------------------------------------------------------------------
+// Pi credential paths (auth.json / models-store.json)
+// ---------------------------------------------------------------------------
+
+/**
+ * Absolute host path to the pi agent directory that holds credentials.
+ * Defaults to `~/.pi/agent` — the same directory pi's own CLI reads.
+ */
+export const piHostAgentDir = (agentDir?: string): string =>
+  agentDir ?? join(process.env.HOME ?? "~", ".pi", "agent");
+
+/** Absolute host path to pi's OAuth auth file. Required for sandbox runs. */
+export const piHostAuthPath = (agentDir?: string): string =>
+  join(piHostAgentDir(agentDir), "auth.json");
+
+/** Absolute host path to pi's cached model catalog. Transferred when present. */
+export const piHostModelsStorePath = (agentDir?: string): string =>
+  join(piHostAgentDir(agentDir), "models-store.json");
+
+/** Sandbox-side pi agent directory (always POSIX separators). */
+export const piSandboxAgentDir = (agentDir?: string): string =>
+  agentDir ?? posix.join("/home/agent", ".pi", "agent");
+
 const isPiSessionFilename = (filename: string, id: string): boolean =>
   filename.endsWith(`_${id}.jsonl`);
 

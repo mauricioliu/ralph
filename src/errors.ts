@@ -188,6 +188,18 @@ export class SessionCaptureError extends Data.TaggedError(
   readonly sessionId: string;
 }> {}
 
+/**
+ * Transferring agent credentials (auth files, model catalogs) from the host
+ * into the sandbox failed. `hostPath` names the missing host credential file
+ * when the failure was an absent host file.
+ */
+export class CredentialProvisionError extends Data.TaggedError(
+  "CredentialProvisionError",
+)<{
+  readonly message: string;
+  readonly hostPath?: string;
+}> {}
+
 /** The provided `cwd` path does not exist or is not a directory. */
 export { CwdError } from "./resolveCwd.js";
 import type { CwdError } from "./resolveCwd.js";
@@ -217,4 +229,5 @@ export type SandboxError =
   | PromptExpansionTimeoutError
   | CommitCollectionTimeoutError
   | MergeToHostTimeoutError
-  | SessionCaptureError;
+  | SessionCaptureError
+  | CredentialProvisionError;

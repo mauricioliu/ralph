@@ -12,12 +12,17 @@ import {
   locateCodexSandboxSession,
   locatePiHostSession,
   locatePiSandboxSession,
+  piHostAgentDir,
+  piHostAuthPath,
+  piHostModelsStorePath,
+  piSandboxAgentDir,
   piSessionDirPath,
   transferClaudeSession,
   transferCodexSession,
   transferPiSession,
   type HostSessionLookup,
 } from "./SessionStore.js";
+import { CredentialProvisionError } from "./errors.js";
 import type { BindMountSandboxHandle } from "./SandboxProvider.js";
 
 const fileExists = async (path: string): Promise<boolean> => {
@@ -267,6 +272,18 @@ export interface AgentProvider {
   readonly captureSessions: boolean;
   /** Provider-owned storage and transfer behavior for resumable agent sessions. */
   readonly sessionStorage?: AgentSessionStorage;
+  /**
+   * Transfer provider credentials from the host into the sandbox before the
+   * agent process starts. Only invoked for sandboxed runs that expose a
+   * bind-mount handle — the no-sandbox provider never calls it, since its
+   * credentials already live on the host. The host copy remains authoritative:
+   * this is a one-way host→sandbox copy, and sandbox-side token refreshes never
+   * propagate back. Throws CredentialProvisionError naming the missing host
+   * file when a required credential is absent.
+   */
+  readonly provisionCredentials?: (args: {
+    readonly handle: BindMountSandboxHandle;
+  }) => Promise<void>;
   buildPrintCommand(options: AgentCommandOptions): PrintCommand;
   buildInteractiveArgs?(options: AgentCommandOptions): string[];
   parseStreamLine(line: string): ParsedStreamEvent[];
@@ -544,6 +561,56 @@ const parsePiStreamLine = (line: string): ParsedStreamEvent[] => {
   return [];
 };
 
+/**
+ * Provider-owned credential transfer for the pi agent (ADR 0021).
+ *
+ * Pi's subscription models (openai-codex via ChatGPT Plus/Pro, zai-coding-cn
+ * via ZAI Coding Plan) authenticate through OAuth tokens in
+ * `~/.pi/agent/auth.json` — there are no API-key env vars a scaffold `.env`
+ * could carry. Before each sandboxed iteration, the host's auth file (plus the
+ * `models-store.json` catalog cache, when present) is copied into the
+ * sandbox's `~/.pi/agent/`, mirroring the session-transfer mechanism. The copy
+ * is one-way: the host file stays authoritative and sandbox-side token
+ * refreshes never propagate back.
+ */
+const makePiCredentialProvisioner = (
+  options?: PiOptions,
+): ((args: { readonly handle: BindMountSandboxHandle }) => Promise<void>) => {
+  const hostAgentDir = piHostAgentDir(options?.credentials?.hostAgentDir);
+  const sandboxAgentDir = piSandboxAgentDir(
+    options?.credentials?.sandboxAgentDir,
+  );
+
+  return async ({ handle }) => {
+    const hostAuthPath = piHostAuthPath(hostAgentDir);
+    if (!(await fileExists(hostAuthPath))) {
+      throw new CredentialProvisionError({
+        message: `pi auth file not found on host: ${hostAuthPath}. Run 'pi' on the host and authenticate (OAuth) once so Ralph can transfer credentials into the sandbox.`,
+        hostPath: hostAuthPath,
+      });
+    }
+
+    // Create the sandbox agent dir; copyFileIn only lands the file itself.
+    await handle.exec(`mkdir -p ${JSON.stringify(sandboxAgentDir)}`);
+    await handle.copyFileIn(
+      hostAuthPath,
+      posix.join(sandboxAgentDir, "auth.json"),
+    );
+
+    // The model catalog cache is transferred when the host has one — a fresh
+    // sandbox needs it to resolve subscription models like
+    // openai-codex/gpt-5.6-terra / zai-coding-cn/glm-5.3 without a network
+    // catalog fetch. Absent on the host → skip; pi falls back to fetching.
+    const hostModelsStorePath = piHostModelsStorePath(hostAgentDir);
+    if (await fileExists(hostModelsStorePath)) {
+      await handle.copyFileIn(
+        hostModelsStorePath,
+        posix.join(sandboxAgentDir, "models-store.json"),
+      );
+    }
+  };
+};
+
 /** Options for the pi agent provider. */
 export interface PiOptions {
   /** Reasoning effort level. Maps to the CLI's --thinking flag. */
@@ -557,6 +624,11 @@ export interface PiOptions {
     readonly hostSessionsDir?: string;
     readonly sandboxSessionsDir?: string;
   };
+  /** Override pi credential directories for tests or non-standard installs. */
+  readonly credentials?: {
+    readonly hostAgentDir?: string;
+    readonly sandboxAgentDir?: string;
+  };
 }
 
 export const pi = (
@@ -567,6 +639,7 @@ export const pi = (
   env: options?.env ?? {},
   captureSessions: options?.captureSessions ?? true,
   sessionStorage: makePiSessionStorage(options),
+  provisionCredentials: makePiCredentialProvisioner(options),
 
   buildPrintCommand({
     prompt,

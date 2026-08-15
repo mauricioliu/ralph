@@ -5,6 +5,7 @@ import { preprocessPrompt } from "./PromptPreprocessor.js";
 import {
   AgentError,
   AgentIdleTimeoutError,
+  CredentialProvisionError,
   SessionCaptureError,
 } from "./errors.js";
 import type { SandboxError } from "./errors.js";
@@ -362,6 +363,30 @@ export const orchestrate = (
             sandbox,
             (ctx) =>
               Effect.gen(function* () {
+                // Provision agent credentials (host → sandbox) before anything
+                // else runs. Pi authenticates via OAuth files rather than env
+                // vars, so the host's auth file must be inside the sandbox
+                // before the agent starts. One-way copy — the host copy stays
+                // authoritative (ADR 0021).
+                if (provider.provisionCredentials && bindMountHandle) {
+                  yield* display.status(
+                    label("Provisioning agent credentials"),
+                    "info",
+                  );
+                  yield* Effect.tryPromise({
+                    try: () =>
+                      provider.provisionCredentials!({
+                        handle: bindMountHandle,
+                      }),
+                    catch: (e) =>
+                      e instanceof CredentialProvisionError
+                        ? e
+                        : new CredentialProvisionError({
+                            message: `Credential provisioning failed: ${e instanceof Error ? e.message : String(e)}`,
+                          }),
+                  });
+                }
+
                 // Resume session: transfer JSONL from host to sandbox before iteration 1
                 const iterationResumeSession =
                   i === 1 ? options.resumeSession : undefined;

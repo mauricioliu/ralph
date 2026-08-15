@@ -830,6 +830,10 @@ After each resumable provider iteration, Ralph automatically captures the agent'
 
 Session capture is enabled by default for `claudeCode()`, `codex()`, and `pi()` and can be opted out via `captureSessions: false`. Providers without `sessionStorage` do not attempt capture. Capture failure fails the run.
 
+### Credential transfer
+
+Pi's subscription models (`openai-codex` via ChatGPT Plus/Pro, `zai-coding-cn` via ZAI Coding Plan) authenticate through OAuth — there are no API-key environment variables a `.ralph/.env` could carry. When a run uses the `pi()` agent inside a sandbox, Ralph transfers the host's `~/.pi/agent/auth.json` (plus the `~/.pi/agent/models-store.json` model-catalog cache, when present) into the sandbox before the agent process starts, on every iteration. The copy is one-way: the host file stays authoritative, and a sandbox-side token refresh never propagates back. If the host has no `auth.json`, the run fails with an error naming the missing file — run `pi` on the host and authenticate once. The no-sandbox provider skips transfer entirely; its credentials already live on the host.
+
 ### Session resume
 
 Pass `resumeSession` to `run()` to continue a prior Claude Code, Codex, or Pi conversation inside a new sandbox:
@@ -931,11 +935,12 @@ The `pi()` factory accepts an optional second argument for provider-specific opt
 agent: pi("claude-sonnet-4-6", { thinking: "high" });
 ```
 
-| Option            | Type                                                                     | Default | Description                                              |
-| ----------------- | ------------------------------------------------------------------------ | ------- | -------------------------------------------------------- |
-| `thinking`        | `"off"` \| `"minimal"` \| `"low"` \| `"medium"` \| `"high"` \| `"xhigh"` | —       | Pi reasoning effort level via the `--thinking` flag      |
-| `env`             | `Record<string, string>`                                                 | `{}`    | Environment variables injected by this agent provider    |
-| `captureSessions` | `boolean`                                                                | `true`  | Capture pi session JSONL to host for `pi --session <id>` |
+| Option            | Type                                                                     | Default | Description                                                                                                                                                       |
+| ----------------- | ------------------------------------------------------------------------ | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `thinking`        | `"off"` \| `"minimal"` \| `"low"` \| `"medium"` \| `"high"` \| `"xhigh"` | —       | Pi reasoning effort level via the `--thinking` flag                                                                                                               |
+| `env`             | `Record<string, string>`                                                 | `{}`    | Environment variables injected by this agent provider                                                                                                             |
+| `captureSessions` | `boolean`                                                                | `true`  | Capture pi session JSONL to host for `pi --session <id>`                                                                                                          |
+| `credentials`     | `{ hostAgentDir?: string; sandboxAgentDir?: string }`                    | —       | Override pi credential directories (defaults: `~/.pi/agent` on the host, `/home/agent/.pi/agent` in the sandbox). See [Credential transfer](#credential-transfer) |
 
 ### Provider `env`
 
