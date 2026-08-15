@@ -11,7 +11,7 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
   const plan = await ralph.run({
     sandbox: docker(),
     name: "Planner",
-    agent: ralph.claudeCode("claude-opus-4-7"),
+    agent: ralph.pi("openai-codex/gpt-5.6-terra:high"),
     promptFile: "./.ralph/plan-prompt.md",
   });
 
@@ -22,7 +22,7 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
     );
   }
 
-  const { issues } = JSON.parse(planMatch[1]) as {
+  const { issues } = JSON.parse(planMatch[1]!) as {
     issues: { number: number; title: string; branch: string }[];
   };
 
@@ -71,7 +71,7 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
 
         const result = await sandbox.run({
           name: "Implementer #" + issue.number,
-          agent: ralph.claudeCode("claude-opus-4-7"),
+          agent: ralph.pi("zai-coding-cn/glm-5.3:high"),
           promptFile: "./.ralph/implement-prompt.md",
           promptArgs: {
             TASK_ID: String(issue.number),
@@ -83,7 +83,7 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
         if (result.commits.length > 0) {
           await sandbox.run({
             name: "Reviewer #" + issue.number,
-            agent: ralph.claudeCode("claude-opus-4-7"),
+            agent: ralph.pi("zai-coding-cn/glm-5.3:high"),
             promptFile: "./.ralph/review-prompt.md",
             promptArgs: {
               TASK_ID: String(issue.number),
@@ -103,7 +103,7 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
   for (const [i, outcome] of settled.entries()) {
     if (outcome.status === "rejected") {
       console.error(
-        `  ✗ #${issues[i].number} (${issues[i].branch}) failed: ${outcome.reason}`,
+        `  ✗ #${issues[i]!.number} (${issues[i]!.branch}) failed: ${outcome.reason}`,
       );
     }
   }
@@ -141,7 +141,7 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
     sandbox: docker(),
     name: "Merger",
     maxIterations: 10,
-    agent: ralph.claudeCode("claude-opus-4-7"),
+    agent: ralph.pi("zai-coding-cn/glm-5.3:high"),
     promptFile: "./.ralph/merge-prompt.md",
     promptArgs: {
       BRANCHES: completedBranches.map((b) => `- ${b}`).join("\n"),
