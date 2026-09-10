@@ -626,6 +626,8 @@ await run({
 
 Tell the agent to output your chosen string(s) in the prompt, and the orchestrator will stop when it detects any of them. The matched signal is returned as `result.completionSignal`.
 
+Completion and structured output use only provider-parsed assistant text/results, never raw stdout (which can contain prompts and tool output). Pi `error`/`aborted` assistant messages fail the invocation even when the process exits zero; an error revokes any previously streamed completion marker. Pi's internal retry can still recover before process exit. On exhausted retries, the error propagates to the caller rather than starting another Ralph iteration.
+
 #### Hanging processes after the completion signal
 
 The agent process is expected to exit shortly after emitting the completion signal. When a child it spawned — a `gh`/git subprocess, a long-lived MCP server, etc. — inherits the agent's stdout pipe and keeps it open, the parent process can linger long past its logical end. Ralph would otherwise wait for the full `idleTimeoutSeconds` and fail with `AgentIdleTimeoutError`, throwing away the commits the agent already made.
@@ -697,13 +699,13 @@ try {
 
 `ralph init` prompts you to choose a sandbox provider (Docker or Podman), an issue tracker (GitHub Issues, Beads, or Custom), and a template, which scaffolds a ready-to-use prompt and `main.mts` suited to a specific workflow. If your project's `package.json` has `"type": "module"`, the file will be named `main.ts` instead. Choosing **Custom** scaffolds the project in a deliberately broken-until-configured state plus a `.ralph/SETUP_ISSUE_TRACKER.md` prompt you feed to your coding agent, which wires up your own tracker by editing the scaffolded files in place. Five templates are available:
 
-| Template                       | Description                                                               |
-| ------------------------------ | ------------------------------------------------------------------------- |
-| `blank`                        | Bare scaffold — write your own prompt and orchestration                   |
-| `simple-loop`                  | Picks issues one by one and closes them                                   |
-| `sequential-reviewer`          | Implements issues one by one, with a code review step after each          |
-| `parallel-planner`             | Plans parallelizable issues, executes on separate branches, then merges   |
-| `parallel-planner-with-review` | Plans parallelizable issues, executes with per-branch review, then merges |
+| Template                       | Description                                                                                         |
+| ------------------------------ | --------------------------------------------------------------------------------------------------- |
+| `blank`                        | Bare scaffold — write your own prompt and orchestration                                             |
+| `simple-loop`                  | Picks issues one by one and closes them                                                             |
+| `sequential-reviewer`          | Implements issues one by one, with a code review step after each                                    |
+| `parallel-planner`             | Plans parallelizable issues, executes on separate branches, then merges                             |
+| `parallel-planner-with-review` | Conservatively selects one authorized issue, recovers/reviews its branch, then verifies integration |
 
 Select a template during `ralph init` when prompted, or re-run init in a fresh repo to try a different one.
 
@@ -712,6 +714,10 @@ Select a template during `ralph init` when prompted, or re-run init in a fresh r
 ### `ralph init`
 
 Scaffolds the `.ralph/` config directory and builds the container image. This is the first command you run in a new repo. You choose a sandbox provider (Docker or Podman) during init — selecting Podman writes a `Containerfile` instead of `Dockerfile` and uses `ralph podman build-image` for the build step.
+
+The `parallel-planner-with-review` scaffold requires an explicit launch allowlist, e.g. `RALPH_AUTHORIZED_ISSUES=42,43 npx tsx .ralph/main.mts`. Labels are not authorization; configure known external blockers in `main.mts`, and the planner must still check issue dependencies and missing human inputs. It selects at most one issue per round to prevent overlapping-module concurrency. Failures, incomplete reviews and no-progress runs stop immediately: there is no automatic provider switch or quota retry loop.
+
+Phase receipts are written atomically to `.ralph/workflow-state.json`. Keep this local file (and its `.tmp` sibling) out of version control. Existing unmerged branches go straight to acceptance review, including legacy branches without receipts; incomplete implementations must be rejected there. A `REVIEW_APPROVED` receipt permits resuming the merger only while both the branch SHA and reviewed target HEAD are unchanged. A merger's completion signal must also pass host-side git ancestry verification. The merger runs the project's required checks even on conflict-free merges. Tracker closure, human/visual acceptance, push and deployment remain separate; no automatic issue closure is performed. An already-integrated open issue stops for manual reconciliation. Empty plans mean no authorized unblocked work was selected, **not** that the whole backlog is complete. The historical template name is retained for compatibility; it now favors safe serial recovery over parallel throughput.
 
 Init detects your host package manager (npm, pnpm, yarn, or bun) from a `packageManager` field or lockfile, defaulting to npm. Templates whose `main` file imports a host dependency — the planner templates import [Zod](https://zod.dev) for their `<plan>` output schema — prompt you to install it with that package manager when it isn't already in your `package.json`, so the first `npx tsx .ralph/main.ts` doesn't fail with `ERR_MODULE_NOT_FOUND`.
 

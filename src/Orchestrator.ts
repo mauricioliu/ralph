@@ -41,7 +41,8 @@ const invokeAgent = (
   SandboxError
 > =>
   Effect.gen(function* () {
-    let resultText = "";
+    let resultText: string | undefined;
+    let streamError: string | undefined;
     let sessionId: string | undefined;
     let usage: IterationUsage | undefined;
     // Accumulated text/result output, scanned for the completion signal so a
@@ -50,7 +51,10 @@ const invokeAgent = (
     let accumulatedOutput = "";
 
     // Deferred that fails when the idle timer fires (no signal seen).
-    const timeoutSignal = yield* Deferred.make<never, AgentIdleTimeoutError>();
+    const timeoutSignal = yield* Deferred.make<
+      never,
+      AgentIdleTimeoutError | AgentError
+    >();
     // Deferred that resolves successfully when the completion-grace timer
     // fires (signal seen but process hasn't exited). Resolving lets the race
     // hand control back to the orchestrator with the buffered output, which
@@ -95,7 +99,7 @@ const invokeAgent = (
             yield* Effect.sleep(Duration.millis(completionTimeoutMs));
             onCompletionTimeout(completionTimeoutMs);
             yield* Deferred.succeed(completionTimeoutDeferred, {
-              result: resultText || accumulatedOutput,
+              result: resultText ?? accumulatedOutput,
               sessionId,
               usage,
             });
@@ -108,10 +112,14 @@ const invokeAgent = (
             yield* Effect.sleep(Duration.millis(idleTimeoutMs));
             yield* Deferred.fail(
               timeoutSignal,
-              new AgentIdleTimeoutError({
-                message: `Agent idle for ${idleTimeoutMs / 1000} seconds — no output received. Consider increasing the idle timeout with --idle-timeout.`,
-                timeoutMs: idleTimeoutMs,
-              }),
+              streamError !== undefined
+                ? new AgentError({
+                    message: `${provider.name} failed: ${streamError}`,
+                  })
+                : new AgentIdleTimeoutError({
+                    message: `Agent idle for ${idleTimeoutMs / 1000} seconds — no output received. Consider increasing the idle timeout with --idle-timeout.`,
+                    timeoutMs: idleTimeoutMs,
+                  }),
             );
           }),
         );
@@ -152,7 +160,15 @@ const invokeAgent = (
               accumulatedOutput += parsed.text;
             } else if (parsed.type === "result") {
               resultText = parsed.result;
-              accumulatedOutput += parsed.result;
+              accumulatedOutput = parsed.result;
+              streamError = undefined;
+            } else if (
+              parsed.type === "error" ||
+              parsed.type === "output_reset"
+            ) {
+              resultText = undefined;
+              accumulatedOutput = "";
+              if (parsed.type === "error") streamError = parsed.message;
             } else if (parsed.type === "tool_call") {
               onToolCall(parsed.name, parsed.args);
             } else if (parsed.type === "session_id") {
@@ -161,14 +177,12 @@ const invokeAgent = (
               usage = parsed.usage;
             }
           }
-          // Check for the completion signal AFTER parsing this line so the
-          // accumulator contains everything seen so far. Flip to the
-          // completion-grace timer the first time the signal appears.
-          if (
-            !completionDetected &&
-            completionSignals.some((sig) => accumulatedOutput.includes(sig))
-          ) {
-            completionDetected = true;
+          // Recompute rather than latch: a failed/follow-up turn revokes an
+          // earlier signal. Never use raw stdout (it includes user/tool text).
+          completionDetected =
+            streamError === undefined &&
+            completionSignals.some((sig) => accumulatedOutput.includes(sig));
+          if (completionDetected) {
             interruptFiber(warningFiber);
             warningFiber = null;
           }
@@ -178,12 +192,20 @@ const invokeAgent = (
         stdin: printCmd.stdin,
       });
 
+      if (streamError !== undefined) {
+        return yield* Effect.fail(
+          new AgentError({
+            message: `${provider.name} failed: ${streamError}`,
+          }),
+        );
+      }
+
       if (execResult.exitCode !== 0) {
         // Prefer stderr; fall back to resultText (from parsed stream events),
         // then to the tail of raw stdout (last 20 non-empty lines).
         let errorDetail = execResult.stderr;
         if (!errorDetail.trim()) {
-          errorDetail = resultText;
+          errorDetail = resultText ?? "";
         }
         if (!errorDetail.trim()) {
           const lines = execResult.stdout.split("\n").filter((l) => l.trim());
@@ -196,7 +218,7 @@ const invokeAgent = (
         );
       }
 
-      return { result: resultText || execResult.stdout, sessionId, usage };
+      return { result: resultText ?? accumulatedOutput, sessionId, usage };
     }).pipe(
       Effect.ensuring(
         Effect.sync(() => {

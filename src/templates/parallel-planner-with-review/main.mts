@@ -1,128 +1,164 @@
-// Parallel Planner with Review — four-phase orchestration loop
-//
-// This template drives a multi-phase workflow:
-//   Phase 1 (Plan):             The planner agent analyzes open issues, builds
-//                               a dependency graph, and outputs a <plan> JSON
-//                               listing unblocked issues with branch names.
-//   Phase 2 (Execute + Review): For each issue, a sandbox is created via
-//                               createSandbox(). The implementer runs first
-//                               (100 iterations). If it produces commits, a
-//                               reviewer runs in the same sandbox on the same
-//                               branch (1 iteration). All issue pipelines run
-//                               concurrently via Promise.allSettled().
-//   Phase 3 (Merge):            The merger agent merges all completed branches
-//                               into the current branch.
-//
-// The outer loop repeats up to MAX_ITERATIONS times so that newly unblocked
-// issues are picked up after each round of merges.
-//
-// Usage:
-//   npx tsx .ralph/main.mts
-// Or add to package.json:
-//   "scripts": { "ralph": "npx tsx .ralph/main.mts" }
-
+// Conservative planner → implement/recover → review → merge workflow.
+// One issue per round: overlapping modules cannot run concurrently.
+// Explicit launch authorization, durable phase receipts and git ancestry are
+// gates; agent completion alone is never evidence of integration.
 import * as ralph from "@mauricioliu/ralph";
 import { docker } from "@mauricioliu/ralph/sandboxes/docker";
 import { z } from "zod";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 
-// The planner emits its plan as JSON inside <plan> tags; Output.object extracts
-// and validates it against this schema. We use Zod here, but any Standard
-// Schema validator works just as well — Valibot, ArkType, etc. See
-// https://standardschema.dev.
+const MAX_ITERATIONS = 10;
+const APPROVED = "<promise>REVIEW_APPROVED</promise>";
+const COMPLETE = "<promise>COMPLETE</promise>";
+const hooks = {
+  sandbox: {
+    onSandboxReady: [
+      { command: "npm install --no-audit --no-fund", timeoutMs: 300_000 },
+    ],
+  },
+};
+const copyToWorktree = ["node_modules"];
+const taskIdPattern = /^[A-Za-z0-9]+(?:[-_.][A-Za-z0-9]+)*$/;
 const planSchema = z.object({
-  issues: z.array(
-    z.object({ id: z.string(), title: z.string(), branch: z.string() }),
-  ),
+  issues: z
+    .array(
+      z.object({
+        id: z.string().regex(taskIdPattern),
+        title: z.string(),
+        branch: z.string(),
+      }),
+    )
+    .max(1),
 });
 
-// ---------------------------------------------------------------------------
-// Configuration
-// ---------------------------------------------------------------------------
-
-// Maximum number of plan→execute→merge cycles before stopping.
-// Raise this if your backlog is large; lower it for a quick smoke-test run.
-const MAX_ITERATIONS = 10;
-
-// Hooks run inside the sandbox before the agent starts each iteration.
-// npm install ensures the sandbox always has fresh dependencies.
-const hooks = {
-  sandbox: { onSandboxReady: [{ command: "npm install" }] },
+// This is an execution allowlist, NOT evidence that external inputs exist.
+// Set only IDs authorized by the human for this launch. No default backlog run.
+const authorized = new Set(
+  (process.env.RALPH_AUTHORIZED_ISSUES ?? "")
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean),
+);
+if (!authorized.size || [...authorized].some((id) => !taskIdPattern.test(id))) {
+  throw new Error(
+    "Set RALPH_AUTHORIZED_ISSUES to explicitly authorized issue IDs before launching.",
+  );
+}
+// Configure known external blockers here; the planner must also check each
+// issue's dependencies and required human decisions before selecting it.
+const externalBlockers = new Set<string>();
+const git = (...args: string[]) =>
+  execFileSync("git", args, { encoding: "utf8" }).trim();
+const target = git("symbolic-ref", "--short", "HEAD");
+const head = () => git("rev-parse", "HEAD");
+const branchSha = (branch: string): string | undefined => {
+  try {
+    return git("rev-parse", "--verify", `refs/heads/${branch}`);
+  } catch {
+    return undefined;
+  }
+};
+const included = (sha: string) => {
+  try {
+    git("merge-base", "--is-ancestor", sha, "HEAD");
+    return true;
+  } catch (error) {
+    if ((error as { status?: number }).status === 1) return false;
+    throw error;
+  }
+};
+const assertTarget = () => {
+  if (git("symbolic-ref", "--short", "HEAD") !== target)
+    throw new Error("Target branch changed; stopping.");
+};
+const receiptSchema = z.object({
+  branch: z.string(),
+  phase: z.enum(["implementing", "review-pending", "merge-pending", "merged"]),
+  sha: z.string().optional(),
+  reviewedBase: z.string().optional(),
+});
+const stateSchema = z.object({
+  version: z.literal(1),
+  issues: z.record(z.string(), receiptSchema),
+});
+type Receipt = z.infer<typeof receiptSchema>;
+const statePath = ".ralph/workflow-state.json";
+let state: z.infer<typeof stateSchema>;
+try {
+  state = stateSchema.parse(JSON.parse(readFileSync(statePath, "utf8")));
+} catch (error) {
+  if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  state = { version: 1, issues: {} };
+}
+const save = (id: string, receipt: Receipt) => {
+  state.issues[id] = receipt;
+  mkdirSync(".ralph", { recursive: true });
+  writeFileSync(`${statePath}.tmp`, JSON.stringify(state, null, 2) + "\n");
+  renameSync(`${statePath}.tmp`, statePath);
 };
 
-// Copy node_modules from the host into the worktree before each sandbox
-// starts. Avoids a full npm install from scratch; the hook above handles
-// platform-specific binaries and any packages added since the last copy.
-const copyToWorktree = ["node_modules"];
-
-// ---------------------------------------------------------------------------
-// Main loop
-// ---------------------------------------------------------------------------
-
+let stoppedOnEmptyPlan = false;
 for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
-  console.log(`\n=== Iteration ${iteration}/${MAX_ITERATIONS} ===\n`);
-
-  // -------------------------------------------------------------------------
-  // Phase 1: Plan
-  //
-  // The planner agent (on the planner model, for deeper reasoning) reads the
-  // open issue list,
-  // builds a dependency graph, and selects the issues that can be worked in
-  // parallel right now (i.e., no blocking dependencies on other open issues).
-  //
-  // It outputs a <plan> JSON block — Output.object parses and validates it.
-  // -------------------------------------------------------------------------
+  assertTarget();
+  const planBase = head();
+  console.log(`Round ${iteration}/${MAX_ITERATIONS}`);
   const plan = await ralph.run({
     hooks,
     sandbox: docker(),
     name: "planner",
-    // One iteration is enough: the planner just needs to read and reason,
-    // not write code. (Structured output requires maxIterations: 1.)
     maxIterations: 1,
-    // The planner model: dependency analysis benefits from deeper reasoning.
     agent: ralph.pi("openai-codex/gpt-5.6-terra:high"),
     promptFile: "./.ralph/plan-prompt.md",
-    // Extract and validate the <plan> JSON into a typed object. Throws
-    // StructuredOutputError if the tag is missing, the JSON is malformed, or
-    // validation fails — which aborts the loop.
+    promptArgs: { AUTHORIZED_ISSUES: [...authorized].join(", ") },
     output: ralph.Output.object({ tag: "plan", schema: planSchema }),
   });
-
-  const issues = plan.output.issues;
-
-  if (issues.length === 0) {
-    // No unblocked work — either everything is done or everything is blocked.
-    console.log("No unblocked issues to work on. Exiting.");
+  if (head() !== planBase)
+    throw new Error("Planner changed target HEAD; stopping.");
+  const [issue] = plan.output.issues;
+  if (!issue) {
+    console.log(
+      "No authorized unblocked work selected. Backlog completion is NOT asserted.",
+    );
+    stoppedOnEmptyPlan = true;
     break;
   }
-
-  console.log(
-    `Planning complete. ${issues.length} issue(s) to work in parallel:`,
-  );
-  for (const issue of issues) {
-    console.log(`  ${issue.id}: ${issue.title} → ${issue.branch}`);
+  if (!authorized.has(issue.id) || externalBlockers.has(issue.id)) {
+    throw new Error(
+      `Issue #${issue.id} is unauthorized or externally blocked; no worker started.`,
+    );
   }
-
-  // -------------------------------------------------------------------------
-  // Phase 2: Execute + Review
-  //
-  // For each issue, create a sandbox via createSandbox() so the implementer
-  // and reviewer share the same sandbox instance per branch. The implementer
-  // runs first; if it produces commits, the reviewer runs in the same sandbox.
-  //
-  // Promise.allSettled means one failing pipeline doesn't cancel the others.
-  // -------------------------------------------------------------------------
-
-  const settled = await Promise.allSettled(
-    issues.map(async (issue) => {
-      const sandbox = await ralph.createSandbox({
-        branch: issue.branch,
-        sandbox: docker(),
-        hooks,
-        copyToWorktree,
-      });
-
-      try {
-        // Run the implementer
+  if (issue.branch !== `ralph/issue-${issue.id}`)
+    throw new Error("Noncanonical issue branch; stopping.");
+  const existing = branchSha(issue.branch);
+  if (existing && included(existing)) {
+    throw new Error(
+      `#${issue.id} branch is already integrated. Reconcile the issue manually; do not reimplement.`,
+    );
+  }
+  const receipt = state.issues[issue.id];
+  const reviewed =
+    existing &&
+    receipt?.phase === "merge-pending" &&
+    receipt.branch === issue.branch &&
+    receipt.sha === existing &&
+    receipt.reviewedBase === head();
+  if (!reviewed) {
+    // Existing commits are work to REVIEW, not a reason to start over. A partial
+    // implementation must fail the reviewer acceptance gate rather than merge.
+    save(issue.id, {
+      branch: issue.branch,
+      phase: existing ? "review-pending" : "implementing",
+      sha: existing,
+    });
+    const sandbox = await ralph.createSandbox({
+      branch: issue.branch,
+      sandbox: docker(),
+      hooks,
+      copyToWorktree,
+    });
+    try {
+      if (!existing) {
         const implement = await sandbox.run({
           name: "implementer",
           maxIterations: 100,
@@ -134,79 +170,49 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
             BRANCH: issue.branch,
           },
         });
-
-        // Only review if the implementer produced commits
-        if (implement.commits.length > 0) {
-          const review = await sandbox.run({
-            name: "reviewer",
-            maxIterations: 1,
-            agent: ralph.pi("zai-coding-cn/glm-5.3:high"),
-            promptFile: "./.ralph/review-prompt.md",
-            promptArgs: {
-              BRANCH: issue.branch,
-            },
-          });
-
-          // Merge commits from both runs so the merge phase sees all of them.
-          // Each sandbox.run() only returns commits from its own run.
-          return {
-            ...review,
-            commits: [...implement.commits, ...review.commits],
-          };
+        if (
+          implement.completionSignal !== COMPLETE ||
+          !implement.commits.length
+        ) {
+          throw new Error(
+            `#${issue.id}: implementation incomplete or no progress; stopping.`,
+          );
         }
-
-        return implement;
-      } finally {
-        await sandbox.close();
       }
-    }),
-  );
-
-  // Log any agents that threw (network error, sandbox crash, etc.).
-  for (const [i, outcome] of settled.entries()) {
-    if (outcome.status === "rejected") {
-      console.error(
-        `  ✗ ${issues[i]!.id} (${issues[i]!.branch}) failed: ${outcome.reason}`,
-      );
+      save(issue.id, {
+        branch: issue.branch,
+        phase: "review-pending",
+        sha: branchSha(issue.branch),
+      });
+      const review = await sandbox.run({
+        name: "reviewer",
+        maxIterations: 1,
+        completionSignal: APPROVED,
+        agent: ralph.pi("zai-coding-cn/glm-5.3:high"),
+        promptFile: "./.ralph/review-prompt.md",
+        promptArgs: { TASK_ID: issue.id, BRANCH: issue.branch },
+      });
+      if (review.completionSignal !== APPROVED)
+        throw new Error(`#${issue.id}: review not approved; stopping.`);
+    } finally {
+      await sandbox.close();
     }
+    assertTarget();
+    if (head() !== planBase)
+      throw new Error("Target changed during review; stopping.");
+    const sha = branchSha(issue.branch);
+    if (!sha || included(sha))
+      throw new Error("Review produced no pending branch; stopping.");
+    save(issue.id, {
+      branch: issue.branch,
+      phase: "merge-pending",
+      sha,
+      reviewedBase: head(),
+    });
   }
 
-  // Only pass branches that actually produced commits to the merge phase.
-  // An agent that ran successfully but made no commits has nothing to merge.
-  const completedIssues = settled
-    .map((outcome, i) => ({ outcome, issue: issues[i]! }))
-    .filter(
-      (entry) =>
-        entry.outcome.status === "fulfilled" &&
-        entry.outcome.value.commits.length > 0,
-    )
-    .map((entry) => entry.issue);
-
-  const completedBranches = completedIssues.map((i) => i.branch);
-
-  console.log(
-    `\nExecution complete. ${completedBranches.length} branch(es) with commits:`,
-  );
-  for (const branch of completedBranches) {
-    console.log(`  ${branch}`);
-  }
-
-  if (completedBranches.length === 0) {
-    // All agents ran but none made commits — nothing to merge this cycle.
-    console.log("No commits produced. Nothing to merge.");
-    continue;
-  }
-
-  // -------------------------------------------------------------------------
-  // Phase 3: Merge
-  //
-  // The merger agent merges all completed branches into the current branch,
-  // resolving any conflicts and running tests to confirm everything works.
-  //
-  // The {{BRANCHES}} and {{ISSUES}} prompt arguments are lists that the agent
-  // uses to know which branches to merge and which issues to close.
-  // -------------------------------------------------------------------------
-  await ralph.run({
+  const sha = state.issues[issue.id]!.sha!;
+  const merged = await ralph.run({
     hooks,
     sandbox: docker(),
     name: "merger",
@@ -214,14 +220,34 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
     agent: ralph.pi("zai-coding-cn/glm-5.3:high"),
     promptFile: "./.ralph/merge-prompt.md",
     promptArgs: {
-      // A markdown list of branch names, one per line.
-      BRANCHES: completedBranches.map((b) => `- ${b}`).join("\n"),
-      // A markdown list of issue IDs and titles, one per line.
-      ISSUES: completedIssues.map((i) => `- ${i.id}: ${i.title}`).join("\n"),
+      BRANCHES: `- ${issue.branch} (${sha})`,
+      ISSUES: `- ${issue.id}: ${issue.title}`,
     },
   });
-
-  console.log("\nBranches merged.");
+  assertTarget();
+  if (
+    merged.completionSignal !== COMPLETE ||
+    branchSha(issue.branch) !== sha ||
+    !included(sha)
+  ) {
+    throw new Error(
+      `#${issue.id}: merge not verified; receipt remains merge-pending.`,
+    );
+  }
+  save(issue.id, { branch: issue.branch, phase: "merged", sha });
+  console.log(
+    `#${issue.id} integrated at ${head()}. Issue closure, visual acceptance and deployment remain separate.`,
+  );
+  // Keep a successfully handled issue out of subsequent plans, even though
+  // GitHub remains open pending human acceptance.
+  authorized.delete(issue.id);
+  if (!authorized.size) {
+    stoppedOnEmptyPlan = true;
+    console.log("Authorized set integrated locally; no further work launched.");
+    break;
+  }
 }
-
-console.log("\nAll done.");
+if (!stoppedOnEmptyPlan)
+  throw new Error(
+    "Iteration limit reached with unresolved authorized work. Resume explicitly after inspection.",
+  );

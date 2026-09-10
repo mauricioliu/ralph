@@ -14,7 +14,7 @@ Review the code changes on branch `{{BRANCH}}` and improve code clarity, consist
 
 # REVIEW PROCESS
 
-1. **Understand the change**: Read the diff and commits above to understand the intent.
+1. **Acceptance gate first**: Read issue {{TASK_ID}} and its comments using `{{VIEW_TASK_COMMAND}}` (substitute the task ID). Check every acceptance criterion, dependency, external input and required approval against the branch. Existing commits may be partial work recovered after an interrupted implementation. Missing inputs, correctness defects or unverified required tests mean BLOCKED, not approval. Do not close or edit tracker issues.
 
 2. **Analyze for improvements**: Look for opportunities to:
    - Reduce unnecessary complexity and nesting
@@ -52,4 +52,6 @@ If you find improvements to make:
 
 If the code is already clean and well-structured, do nothing.
 
-Once complete, output <promise>COMPLETE</promise>.
+Run the required tests and type checking even if no refinement was necessary, within the project's server/device permissions. If a required check cannot run, report it as blocked. Preserve functionality; report functional defects rather than disguising them as readability fixes.
+
+Only when every acceptance criterion within this slice is satisfied, required checks pass, and no blockers remain, output <promise>REVIEW_APPROVED</promise>. Otherwise report concrete blockers and stop WITHOUT that marker. A review ending or a test subset passing is not approval.

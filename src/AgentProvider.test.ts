@@ -541,7 +541,7 @@ describe("pi factory", () => {
     );
   });
 
-  it("parseStreamLine captures agent_error event with string error as result", () => {
+  it("parseStreamLine captures agent_error event with string error", () => {
     const provider = pi("claude-sonnet-4-6");
     const line = JSON.stringify({
       type: "agent_error",
@@ -549,13 +549,13 @@ describe("pi factory", () => {
     });
     expect(provider.parseStreamLine(line)).toEqual([
       {
-        type: "result",
-        result: "Authentication failed: invalid API key",
+        type: "error",
+        message: "Authentication failed: invalid API key",
       },
     ]);
   });
 
-  it("parseStreamLine captures agent_error event with object error as result", () => {
+  it("parseStreamLine captures agent_error event with object error", () => {
     const provider = pi("claude-sonnet-4-6");
     const line = JSON.stringify({
       type: "agent_error",
@@ -563,13 +563,13 @@ describe("pi factory", () => {
     });
     expect(provider.parseStreamLine(line)).toEqual([
       {
-        type: "result",
-        result: "Rate limit exceeded",
+        type: "error",
+        message: "Rate limit exceeded",
       },
     ]);
   });
 
-  it("parseStreamLine captures error event with string message as result", () => {
+  it("parseStreamLine captures error event with string message", () => {
     const provider = pi("claude-sonnet-4-6");
     const line = JSON.stringify({
       type: "error",
@@ -577,13 +577,13 @@ describe("pi factory", () => {
     });
     expect(provider.parseStreamLine(line)).toEqual([
       {
-        type: "result",
-        result: "Internal server error",
+        type: "error",
+        message: "Internal server error",
       },
     ]);
   });
 
-  it("parseStreamLine captures error event with string error field as result", () => {
+  it("parseStreamLine captures error event with string error field", () => {
     const provider = pi("claude-sonnet-4-6");
     const line = JSON.stringify({
       type: "error",
@@ -591,28 +591,22 @@ describe("pi factory", () => {
     });
     expect(provider.parseStreamLine(line)).toEqual([
       {
-        type: "result",
-        result: "Connection refused",
+        type: "error",
+        message: "Connection refused",
       },
     ]);
   });
 
-  it("parseStreamLine returns empty array for agent_error with no extractable message", () => {
-    const provider = pi("claude-sonnet-4-6");
-    const line = JSON.stringify({
-      type: "agent_error",
-      // no error field
-    });
-    expect(provider.parseStreamLine(line)).toEqual([]);
+  it("keeps agent_error without an extractable message as failure", () => {
+    expect(
+      pi("test").parseStreamLine(JSON.stringify({ type: "agent_error" })),
+    ).toEqual([{ type: "error", message: "Pi agent_error" }]);
   });
 
-  it("parseStreamLine returns empty array for error event with no extractable message", () => {
-    const provider = pi("claude-sonnet-4-6");
-    const line = JSON.stringify({
-      type: "error",
-      // no message or error field
-    });
-    expect(provider.parseStreamLine(line)).toEqual([]);
+  it("keeps an error without an extractable message as failure", () => {
+    expect(
+      pi("test").parseStreamLine(JSON.stringify({ type: "error" })),
+    ).toEqual([{ type: "error", message: "Pi error" }]);
   });
 
   it("accepts an env option and exposes it on the provider", () => {

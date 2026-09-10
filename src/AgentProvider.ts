@@ -37,6 +37,8 @@ const fileExists = async (path: string): Promise<boolean> => {
 export type ParsedStreamEvent =
   | { type: "text"; text: string }
   | { type: "result"; result: string }
+  | { type: "error"; message: string }
+  | { type: "output_reset" }
   | { type: "tool_call"; name: string; args: string }
   | { type: "session_id"; sessionId: string }
   | { type: "usage"; usage: IterationUsage };
@@ -499,6 +501,32 @@ const makePiSessionStorage = (options?: PiOptions): AgentSessionStorage => {
   };
 };
 
+// message_end is authoritative; agent_end repeats the final message. An
+// error is provisional until process exit: Pi can retry after agent_end.
+const parsePiAssistant = (msg: any): ParsedStreamEvent[] => {
+  if (msg?.role !== "assistant") return [];
+  if (msg.stopReason === "error" || msg.stopReason === "aborted") {
+    return [
+      {
+        type: "error",
+        message:
+          typeof msg.errorMessage === "string" && msg.errorMessage.trim()
+            ? msg.errorMessage
+            : `Pi assistant ${msg.stopReason}`,
+      },
+    ];
+  }
+  const texts = Array.isArray(msg.content)
+    ? msg.content
+        .filter(
+          (block: any) =>
+            block?.type === "text" && typeof block.text === "string",
+        )
+        .map((block: any) => block.text)
+    : [];
+  return [{ type: "result", result: texts.join("") }];
+};
+
 const parsePiStreamLine = (line: string): ParsedStreamEvent[] => {
   if (!line.startsWith("{")) return [];
   try {
@@ -510,6 +538,10 @@ const parsePiStreamLine = (line: string): ParsedStreamEvent[] => {
     if (obj.type === "session" && typeof obj.id === "string") {
       return [{ type: "session_id", sessionId: obj.id }];
     }
+    if (obj.type === "message_start" && obj.message?.role === "assistant") {
+      return [{ type: "output_reset" }];
+    }
+    if (obj.type === "message_end") return parsePiAssistant(obj.message);
     if (obj.type === "message_update" && obj.assistantMessageEvent) {
       const evt = obj.assistantMessageEvent as {
         type: string;
@@ -531,34 +563,23 @@ const parsePiStreamLine = (line: string): ParsedStreamEvent[] => {
       if (typeof argValue !== "string") return [];
       return [{ type: "tool_call", name: toolName, args: argValue }];
     }
-    // Pi emits agent_error / error events on stdout (not stderr) for auth
-    // failures, rate limits, and API errors. Capture them as result events so
-    // the Orchestrator's stderr-empty fallback can surface them to the user.
     if (obj.type === "agent_error" || obj.type === "error") {
-      const msg = extractErrorMessage(obj);
-      return msg ? [{ type: "result", result: msg }] : [];
+      return [
+        {
+          type: "error",
+          message: extractErrorMessage(obj) ?? `Pi ${obj.type}`,
+        },
+      ];
+    }
+    if (obj.type === "auto_retry_end" && obj.success === false) {
+      return [
+        { type: "error", message: obj.finalError || "Pi retries exhausted" },
+      ];
     }
     if (obj.type === "agent_end" && Array.isArray(obj.messages)) {
-      const messages = obj.messages as {
-        role: string;
-        content: { type: string; text?: string }[];
-      }[];
-      for (let i = messages.length - 1; i >= 0; i--) {
-        const msg = messages[i];
-        if (msg?.role === "assistant") {
-          const texts: string[] = [];
-          for (const block of msg.content) {
-            if (block.type === "text" && typeof block.text === "string") {
-              texts.push(block.text);
-            }
-          }
-          if (texts.length > 0) {
-            return [{ type: "result", result: texts.join("") }];
-          }
-          break;
-        }
-      }
-      return [];
+      return parsePiAssistant(
+        obj.messages.findLast((msg: any) => msg?.role === "assistant"),
+      );
     }
   } catch {
     // Not valid JSON — skip

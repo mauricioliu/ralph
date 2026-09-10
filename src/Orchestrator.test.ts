@@ -1319,14 +1319,14 @@ describe("Orchestrator error handling", () => {
     expect(exit._tag).toBe("Failure");
   });
 
-  it("falls back to stdout when stream has no result line", async () => {
+  it("uses only parsed assistant text when stream has no result line", async () => {
     const hostDir = await mkdtemp(join(tmpdir(), "orch-fallback-host-"));
 
     await initRepo(hostDir);
     await commitFile(hostDir, "hello.txt", "hello", "initial commit");
 
     // Layer where agent stream emits only assistant lines, no result line.
-    // stdout contains the completion signal so the fallback path picks it up.
+    // A marker in raw stdout must not override the actual assistant text.
     const { factoryLayer, sandboxRepoDir } = makeTestSandboxFactory(
       hostDir,
       (dir) => {
@@ -1367,9 +1367,9 @@ describe("Orchestrator error handling", () => {
       }).pipe(Effect.provide(Layer.merge(factoryLayer, testDisplayLayer))),
     );
 
-    // Should detect COMPLETE from the stdout fallback
-    expect(result.iterations.length).toBe(1);
-    expect(result.completionSignal).toBe("<promise>COMPLETE</promise>");
+    expect(result.iterations.length).toBe(5);
+    expect(result.completionSignal).toBeUndefined();
+    expect(result.stdout).toBe("working...".repeat(5));
   });
 
   it("preserves iteration 1 work when agent fails on iteration 2", async () => {
@@ -2637,6 +2637,129 @@ const makeMockPiAgentLayer = (
 };
 
 describe("Orchestrator with pi provider", () => {
+  const marker = "<promise>COMPLETE</promise>";
+  const assistant = (text: string, stopReason = "stop") => ({
+    role: "assistant",
+    stopReason,
+    content: [{ type: "text", text }],
+    ...(stopReason === "error"
+      ? { errorMessage: "429 code 1308: quota exhausted" }
+      : {}),
+  });
+
+  const replayPi = async (events: unknown[], hang = false) => {
+    const hostDir = await mkdtemp(join(tmpdir(), "orch-pi-replay-"));
+    await initRepo(hostDir);
+    await commitFile(hostDir, "hello.txt", "hello", "initial commit");
+    const { factoryLayer } = makeTestSandboxFactory(hostDir, (dir) => {
+      const real = makeLocalSandbox(dir);
+      return {
+        ...real,
+        exec: (command, options) => {
+          if (!command.startsWith("pi ")) return real.exec(command, options);
+          return Effect.gen(function* () {
+            const lines = events.map((event) => JSON.stringify(event));
+            for (const line of lines) options?.onLine?.(line);
+            if (hang) yield* Effect.never;
+            return { stdout: lines.join("\n"), stderr: "", exitCode: 0 };
+          });
+        },
+      };
+    });
+    try {
+      return await Effect.runPromise(
+        orchestrate({
+          provider: piTestProvider,
+          hostRepoDir: hostDir,
+          iterations: 1,
+          prompt: `Do work, then emit ${marker}`,
+          idleTimeoutSeconds: 0.1,
+          completionTimeoutSeconds: 0.01,
+        }).pipe(Effect.provide(Layer.merge(factoryLayer, testDisplayLayer))),
+      );
+    } finally {
+      await rm(hostDir, { recursive: true, force: true });
+    }
+  };
+
+  it("rejects Pi quota errors despite exit zero and a COMPLETE in the user prompt", async () => {
+    const user = { role: "user", content: [{ type: "text", text: marker }] };
+    const error = assistant("", "error");
+    await expect(
+      replayPi([
+        { type: "message_start", message: user },
+        { type: "message_end", message: error },
+        { type: "agent_end", messages: [user, error] },
+      ]),
+    ).rejects.toThrow(/429.*1308/);
+  });
+
+  it("never falls back to user, tool, or malformed stdout for completion", async () => {
+    const result = await replayPi([
+      { type: "message_start", message: { role: "user", content: marker } },
+      { type: "tool_execution_end", result: marker },
+      { mystery: marker },
+    ]);
+    expect(result.completionSignal).toBeUndefined();
+  });
+
+  it.each(["error", "aborted"])(
+    "discards a streamed COMPLETE when the final message is %s",
+    async (stopReason) => {
+      await expect(
+        replayPi([
+          {
+            type: "message_update",
+            assistantMessageEvent: { type: "text_delta", delta: marker },
+          },
+          { type: "message_end", message: assistant(marker, stopReason) },
+          { type: "agent_end", messages: [assistant(marker, stopReason)] },
+        ]),
+      ).rejects.toThrow(stopReason === "error" ? /429/ : /aborted/);
+    },
+  );
+
+  it("allows Pi's internal retry to recover before process exit", async () => {
+    const error = assistant("", "error");
+    const success = assistant(marker);
+    const result = await replayPi([
+      { type: "message_end", message: error },
+      { type: "agent_end", messages: [error] },
+      { type: "auto_retry_start", attempt: 1 },
+      { type: "message_start", message: { role: "assistant", content: [] } },
+      { type: "message_end", message: success },
+      { type: "agent_end", messages: [error, success] },
+    ]);
+    expect(result.completionSignal).toBe(marker);
+  });
+
+  it("does not force-complete a hanging failed stream after seeing COMPLETE", async () => {
+    await expect(
+      replayPi(
+        [
+          {
+            type: "message_update",
+            assistantMessageEvent: { type: "text_delta", delta: marker },
+          },
+          { type: "message_end", message: assistant("", "error") },
+        ],
+        true,
+      ),
+    ).rejects.toThrow(/429/);
+  });
+
+  it("does not retain COMPLETE from a previous assistant turn", async () => {
+    const result = await replayPi([
+      { type: "message_end", message: assistant(marker) },
+      { type: "message_start", message: { role: "assistant", content: [] } },
+      { type: "message_end", message: assistant("Not finished") },
+      {
+        type: "agent_end",
+        messages: [assistant(marker), assistant("Not finished")],
+      },
+    ]);
+    expect(result.completionSignal).toBeUndefined();
+  });
   it("runs a single iteration with pi provider and produces a commit", async () => {
     const hostDir = await mkdtemp(join(tmpdir(), "orch-pi-host-"));
     await initRepo(hostDir);

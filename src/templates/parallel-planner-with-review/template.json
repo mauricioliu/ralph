@@ -1,4 +1,4 @@
 {
   "name": "parallel-planner-with-review",
-  "description": "Plans parallelizable issues, executes with per-branch review, merges"
+  "description": "Serial authorized work with branch recovery, acceptance review and verified merges"
 }

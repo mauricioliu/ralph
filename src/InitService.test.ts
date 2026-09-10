@@ -1165,27 +1165,28 @@ describe("InitService scaffold", () => {
       const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
       expect(mainTs).toContain("implement-prompt.md");
       expect(mainTs).toContain("review-prompt.md");
-      expect(mainTs).toContain("implement.commits.length > 0");
+      expect(mainTs).toContain("!implement.commits.length");
     });
 
-    it("main.mts captures reviewer result and merges commits from both runs", async () => {
+    it("main.mts requires review approval and records the reviewed branch SHA", async () => {
       const dir = await makeDir();
       await runScaffold(dir, { templateName: "parallel-planner-with-review" });
 
       const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
       // Reviewer result must be captured, not discarded
       expect(mainTs).toContain("const review = await sandbox.run");
-      // Commits from both implementer and reviewer must be merged
-      expect(mainTs).toContain("implement.commits");
-      expect(mainTs).toContain("review.commits");
+      expect(mainTs).toContain("review.completionSignal !== APPROVED");
+      expect(mainTs).toContain("branchSha(issue.branch)");
+      expect(mainTs).toContain('phase: "merge-pending"');
     });
 
-    it("main.mts uses Promise.allSettled for parallel execution", async () => {
+    it("main.mts serializes issue pipelines and requires explicit authorization", async () => {
       const dir = await makeDir();
       await runScaffold(dir, { templateName: "parallel-planner-with-review" });
-
       const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
-      expect(mainTs).toContain("Promise.allSettled");
+      expect(mainTs).not.toContain("Promise.allSettled");
+      expect(mainTs).toContain(".max(1)");
+      expect(mainTs).toContain("RALPH_AUTHORIZED_ISSUES");
     });
 
     it("main.mts has correct maxIterations: planner=1, implementer=100, reviewer=1, merger=1", async () => {
@@ -2021,7 +2022,7 @@ describe("InitService scaffold", () => {
       expect(prompt).not.toContain("{{VIEW_TASK_COMMAND}}");
     });
 
-    it("parallel-planner-with-review with github-issues produces merge-prompt with gh issue close", async () => {
+    it("parallel-planner-with-review with github-issues leaves closure outside the merger", async () => {
       const dir = await makeDir();
       await runScaffold(dir, {
         templateName: "parallel-planner-with-review",
@@ -2032,11 +2033,12 @@ describe("InitService scaffold", () => {
         join(dir, ".ralph", "merge-prompt.md"),
         "utf-8",
       );
-      expect(prompt).toContain("gh issue close");
+      expect(prompt).toContain("Do not close or edit issues");
+      expect(prompt).not.toContain("gh issue close");
       expect(prompt).not.toContain("{{CLOSE_TASK_COMMAND}}");
     });
 
-    it("parallel-planner-with-review with beads produces merge-prompt with bd close", async () => {
+    it("parallel-planner-with-review with beads leaves closure outside the merger", async () => {
       const dir = await makeDir();
       await runScaffold(dir, {
         templateName: "parallel-planner-with-review",
@@ -2047,7 +2049,8 @@ describe("InitService scaffold", () => {
         join(dir, ".ralph", "merge-prompt.md"),
         "utf-8",
       );
-      expect(prompt).toContain("bd close");
+      expect(prompt).toContain("Do not close or edit issues");
+      expect(prompt).not.toContain("bd close");
       expect(prompt).not.toContain("gh issue");
       expect(prompt).not.toContain("{{CLOSE_TASK_COMMAND}}");
     });
