@@ -46,7 +46,11 @@ function harness(
     review?: string;
     quota?: boolean;
     merge?: boolean;
-    authorized?: string;
+    authorized?: string | null;
+    reconcile?: boolean;
+    branches?: Record<string, string>;
+    integratedShas?: string[];
+    state?: Record<string, unknown>;
     issues?: (typeof issue)[];
     noCommits?: boolean;
     lock?: { pid: number; alive?: boolean; raw?: string };
@@ -62,6 +66,14 @@ function harness(
   const branches = new Map<string, string>();
   const ancestors = new Set(["base"]);
   if (options.existing) branches.set(issue.branch, options.existing);
+  for (const [branch, sha] of Object.entries(options.branches ?? {}))
+    branches.set(branch, sha);
+  for (const sha of options.integratedShas ?? []) ancestors.add(sha);
+  if (options.state)
+    files.set(
+      ".ralph/workflow-state.json",
+      JSON.stringify({ version: 1, issues: options.state }, null, 2) + "\n",
+    );
   if (options.lock) {
     if (options.lock.alive) alive.add(options.lock.pid);
     files.set(
@@ -157,7 +169,14 @@ function harness(
         files.delete(path);
       },
       {
-        env: { RALPH_AUTHORIZED_ISSUES: options.authorized ?? "56" },
+        env: {
+          ...(options.authorized === null
+            ? {}
+            : {
+                RALPH_AUTHORIZED_ISSUES: options.authorized ?? "56",
+              }),
+          ...(options.reconcile ? { RALPH_RECONCILE: "1" } : {}),
+        },
         pid: ownPid,
         kill: (pid: number) => {
           if (alive.has(pid)) return true;
@@ -268,6 +287,128 @@ describe("review workflow recovery gates", () => {
     const h = harness({ issues: [] });
     await h.run();
     expect(h.calls).toEqual(["planner"]);
+  });
+});
+
+describe("review workflow reconciliation report", () => {
+  it("reports phase, branch, SHA and next step per issue across phases", async () => {
+    const h = harness({
+      reconcile: true,
+      branches: {
+        "ralph/issue-56": "approved-56",
+        "ralph/issue-57": "work-57",
+        "ralph/issue-59": "done-59",
+      },
+      integratedShas: ["done-59"],
+      state: {
+        "56": {
+          branch: "ralph/issue-56",
+          phase: "merge-pending",
+          sha: "approved-56",
+          reviewedBase: "base",
+        },
+        "57": {
+          branch: "ralph/issue-57",
+          phase: "review-pending",
+          sha: "work-57",
+        },
+        "58": { branch: "ralph/issue-58", phase: "implementing" },
+        "59": { branch: "ralph/issue-59", phase: "merged", sha: "done-59" },
+      },
+    });
+    await h.run();
+    const out = h.logs.join("\n");
+    expect(out).toContain("Issue closure stays manual; no GitHub mutations");
+    expect(out).toContain("#56 [merge-pending] ralph/issue-56 @ approved-56");
+    expect(out).toContain(
+      "approval intact for approved-56; relaunch the coordinator to merge",
+    );
+    expect(out).toContain("#57 [review-pending] ralph/issue-57 @ work-57");
+    expect(out).toContain("relaunch to run acceptance review at work-57");
+    expect(out).toContain("#58 [implementing] ralph/issue-58 @ no branch");
+    expect(out).toContain("relaunch to implement");
+    expect(out).toContain("#59 [merged] ralph/issue-59 @ done-59");
+    expect(out).toContain("close issue #59 manually");
+    // Read-only mode: no lock taken, no models invoked, no state rewritten.
+    expect(h.calls).toEqual([]);
+    expect(h.files.has(".ralph/workflow-lock.json")).toBe(false);
+  });
+  it("reports an authorized issue with no receipt as not started", async () => {
+    const h = harness({ reconcile: true });
+    await h.run();
+    const out = h.logs.join("\n");
+    expect(out).toContain("#56 [pending] ralph/issue-56 @ no branch");
+    expect(out).toContain(
+      "not started; authorize and relaunch to plan and implement",
+    );
+    expect(h.calls).toEqual([]);
+  });
+  it("scopes to persisted receipts when no issues are authorized", async () => {
+    const h = harness({
+      reconcile: true,
+      authorized: null,
+      branches: { "ralph/issue-57": "work-57" },
+      state: {
+        "57": {
+          branch: "ralph/issue-57",
+          phase: "review-pending",
+          sha: "work-57",
+        },
+      },
+    });
+    await h.run();
+    expect(h.logs.join("\n")).toContain(
+      "#57 [review-pending] ralph/issue-57 @ work-57",
+    );
+    expect(h.calls).toEqual([]);
+  });
+  it("flags a moved branch as needing re-review after approval", async () => {
+    const h = harness({
+      reconcile: true,
+      branches: { "ralph/issue-56": "moved-56" },
+      state: {
+        "56": {
+          branch: "ralph/issue-56",
+          phase: "merge-pending",
+          sha: "approved-56",
+          reviewedBase: "base",
+        },
+      },
+    });
+    await h.run();
+    expect(h.logs.join("\n")).toContain(
+      "branch moved after approval (approved approved-56, now moved-56); relaunch re-reviews",
+    );
+  });
+  it("shows the preserved resume phase after a failed round", async () => {
+    const h = harness({ existing: "old", quota: true });
+    await expect(h.run()).rejects.toThrow(/429/);
+    h.options.reconcile = true;
+    await h.run();
+    const out = h.logs.join("\n");
+    expect(out).toContain("#56 [merge-pending] ralph/issue-56 @ old");
+    expect(out).toContain(
+      "approval intact for old; relaunch the coordinator to merge",
+    );
+  });
+  it("prints the report on the already-integrated stop instead of a bare instruction", async () => {
+    const h = harness({
+      existing: "done-56",
+      integratedShas: ["done-56"],
+      state: {
+        "56": {
+          branch: "ralph/issue-56",
+          phase: "review-pending",
+          sha: "done-56",
+        },
+      },
+    });
+    await expect(h.run()).rejects.toThrow(/already integrated/);
+    await expect(h.run()).rejects.toThrow(/closure stays manual/);
+    const out = h.logs.join("\n");
+    expect(out).toContain("#56 [review-pending] ralph/issue-56 @ done-56");
+    expect(out).toContain("close issue #56 manually or open follow-up work");
+    expect(h.calls).toEqual(["planner", "planner"]);
   });
 });
 

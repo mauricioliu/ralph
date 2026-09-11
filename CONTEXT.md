@@ -90,6 +90,18 @@ _Avoid_: "orchestrator" (that's Ralph's own role), "workflow runner", "main proc
 The `.ralph/workflow-lock.json` file a **coordinator** creates exclusively at launch and removes when it exits. A second coordinator finding a lock owned by a live PID refuses to start; a lock owned by a dead PID is stale and is taken over by the next launch. Heartbeats timestamp the lock for diagnostics but never evict a live owner.
 _Avoid_: "mutex", "singleton file", "workflow guard"
 
+**Phase receipt**:
+The durable per-issue record a **coordinator** writes atomically to the workflow state file: canonical branch, workflow **phase**, approved SHA and reviewed base. Failures never rewrite a receipt, so a stop preserves the resume **phase**; receipts are claims that must be re-verified against git before use.
+_Avoid_: "checkpoint", "status entry", "ticket state"
+
+**Phase**:
+The durable workflow step recorded in a **phase receipt** for one issue: `implementing`, `review-pending`, `merge-pending` or `merged`; absence of a receipt is the pending state. Orthogonal to **agent role** (which runs) and to **iteration** (which advances an agent).
+_Avoid_: "stage", "step" (that's a workflow instruction), "status" (too generic)
+
+**Reconciliation report**:
+The read-only per-issue printout a scaffolded workflow derives from **phase receipts** plus live git ancestry: current **phase**, branch, SHA and the next step to advance. Produced on demand (`RALPH_RECONCILE=1`) and at the already-integrated stop; takes no **coordinator lock** and performs no tracker mutations.
+_Avoid_: "status page", "audit log", "dashboard"
+
 ### Execution
 
 **Agent invoker**:
