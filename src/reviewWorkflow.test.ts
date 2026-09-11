@@ -14,7 +14,7 @@ const source = readFileSync(
     ),
   "utf8",
 );
-const js = ts.transpileModule(source.replace(/^import .*;\n/gm, ""), {
+const js = ts.transpileModule(source.replace(/^import[^;]*;\n/gm, ""), {
   compilerOptions: {
     target: ts.ScriptTarget.ES2022,
     module: ts.ModuleKind.ESNext,
@@ -29,6 +29,7 @@ const execute = compileFunction(`return (async () => { ${js} })();`, [
   "readFileSync",
   "renameSync",
   "writeFileSync",
+  "unlinkSync",
   "process",
   "console",
 ]);
@@ -48,13 +49,36 @@ function harness(
     authorized?: string;
     issues?: (typeof issue)[];
     noCommits?: boolean;
+    lock?: { pid: number; alive?: boolean; raw?: string };
   } = {},
 ) {
   const calls: string[] = [];
+  const logs: string[] = [];
   const files = new Map<string, string>();
+  const alive = new Set<number>();
+  const ownPid = 4242;
+  alive.add(ownPid);
+  let lockSeen: boolean | undefined;
   const branches = new Map<string, string>();
   const ancestors = new Set(["base"]);
   if (options.existing) branches.set(issue.branch, options.existing);
+  if (options.lock) {
+    if (options.lock.alive) alive.add(options.lock.pid);
+    files.set(
+      ".ralph/workflow-lock.json",
+      options.lock.raw ??
+        JSON.stringify(
+          {
+            pid: options.lock.pid,
+            target: "main",
+            startedAt: "2026-09-10T00:00:00.000Z",
+            heartbeatAt: "2026-09-10T00:00:00.000Z",
+          },
+          null,
+          2,
+        ) + "\n",
+    );
+  }
   let head = "base";
   const git = (_command: string, args: string[]) => {
     if (args[0] === "symbolic-ref") return "main";
@@ -75,12 +99,14 @@ function harness(
     Output: { object: (value: unknown) => value },
     run: async (args: any) => {
       calls.push(args.name);
-      if (args.name === "planner")
+      if (args.name === "planner") {
+        lockSeen = files.has(".ralph/workflow-lock.json");
         return {
           output: args.output.schema.parse({
             issues: options.issues ?? [issue],
           }),
         };
+      }
       if (options.quota) throw new Error("429 quota");
       if (options.merge !== false) {
         ancestors.add(branches.get(issue.branch)!);
@@ -120,11 +146,25 @@ function harness(
         files.set(to, files.get(from)!);
         files.delete(from);
       },
-      (path: string, content: string) => {
+      (path: string, content: string, writeOptions?: { flag?: string }) => {
+        if (writeOptions?.flag === "wx" && files.has(path))
+          throw Object.assign(new Error("file exists"), { code: "EEXIST" });
         files.set(path, content);
       },
-      { env: { RALPH_AUTHORIZED_ISSUES: options.authorized ?? "56" } },
-      { log: () => {} },
+      (path: string) => {
+        if (!files.has(path))
+          throw Object.assign(new Error("no such file"), { code: "ENOENT" });
+        files.delete(path);
+      },
+      {
+        env: { RALPH_AUTHORIZED_ISSUES: options.authorized ?? "56" },
+        pid: ownPid,
+        kill: (pid: number) => {
+          if (alive.has(pid)) return true;
+          throw Object.assign(new Error("no such process"), { code: "ESRCH" });
+        },
+      },
+      { log: (line: string) => logs.push(line) },
     );
   const receipt = () =>
     JSON.parse(files.get(".ralph/workflow-state.json")!).issues[56];
@@ -135,6 +175,8 @@ function harness(
     branches,
     files,
     options,
+    logs,
+    lockHeldDuringPlanner: () => lockSeen,
     changeBase: () => {
       head = "changed-base";
     },
@@ -226,5 +268,53 @@ describe("review workflow recovery gates", () => {
     const h = harness({ issues: [] });
     await h.run();
     expect(h.calls).toEqual(["planner"]);
+  });
+});
+
+describe("review workflow coordinator lock", () => {
+  it("refuses a second coordinator before any worker or state mutation", async () => {
+    const h = harness({ lock: { pid: 999, alive: true } });
+    await expect(h.run()).rejects.toThrow(
+      /PID 999 is already active on main.*refusing to start a second/,
+    );
+    expect(h.calls).toEqual([]);
+    // The active coordinator's lock and workflow state stay untouched.
+    expect(h.files.get(".ralph/workflow-lock.json")).toMatch(/"pid": 999/);
+    expect(h.files.has(".ralph/workflow-state.json")).toBe(false);
+  });
+  it("refuses an unreadable lock instead of overwriting it", async () => {
+    const h = harness({ lock: { pid: 999, alive: false, raw: "{corrupt" } });
+    await expect(h.run()).rejects.toThrow(/unreadable/);
+    expect(h.calls).toEqual([]);
+    expect(h.files.get(".ralph/workflow-lock.json")).toBe("{corrupt");
+  });
+  it("takes over a stale lock left by a dead coordinator", async () => {
+    const h = harness({ lock: { pid: 999, alive: false } });
+    await h.run();
+    expect(h.logs.join("\n")).toMatch(/stale lock left by dead PID 999/);
+    expect(h.calls).toEqual([
+      "planner",
+      "implementer",
+      "reviewer",
+      "close",
+      "merger",
+    ]);
+    expect(h.receipt().phase).toBe("merged");
+    expect(h.files.has(".ralph/workflow-lock.json")).toBe(false);
+  });
+  it("acquires and releases the lock on a normal launch", async () => {
+    const h = harness();
+    await h.run();
+    expect(h.lockHeldDuringPlanner()).toBe(true);
+    expect(h.calls).toContain("planner");
+    expect(h.files.has(".ralph/workflow-lock.json")).toBe(false);
+  });
+  it("releases the lock after a failed run so relaunching is not blocked", async () => {
+    const h = harness({ quota: true });
+    await expect(h.run()).rejects.toThrow(/429/);
+    expect(h.files.has(".ralph/workflow-lock.json")).toBe(false);
+    h.options.quota = false;
+    await h.run();
+    expect(h.calls).toContain("merger");
   });
 });

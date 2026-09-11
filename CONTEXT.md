@@ -80,6 +80,16 @@ _Avoid_: "agent adapter", "agent driver"
 The named function an **agent** performs within a scaffolded workflow -- planner, implementer, reviewer, or merger. Orthogonal to the **agent provider**; the same provider may serve different roles. Collectively, every role except planner is a **worker**.
 _Avoid_: "job", "phase" (that's the workflow step), "task" (that's the work item)
 
+### Workflow
+
+**Coordinator**:
+The host-side process that executes a scaffolded workflow's `main.mts`, sequencing the **agent roles** and owning the workflow state file in the **config directory**. Only one coordinator may run against an installation at a time.
+_Avoid_: "orchestrator" (that's Ralph's own role), "workflow runner", "main process"
+
+**Coordinator lock**:
+The `.ralph/workflow-lock.json` file a **coordinator** creates exclusively at launch and removes when it exits. A second coordinator finding a lock owned by a live PID refuses to start; a lock owned by a dead PID is stale and is taken over by the next launch. Heartbeats timestamp the lock for diagnostics but never evict a live owner.
+_Avoid_: "mutex", "singleton file", "workflow guard"
+
 ### Execution
 
 **Agent invoker**:
