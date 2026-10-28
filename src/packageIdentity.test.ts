@@ -1,5 +1,15 @@
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { execFile } from "node:child_process";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  writeFile,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, relative } from "node:path";
+import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 
 const root = join(import.meta.dirname, "..");
@@ -34,14 +44,60 @@ describe("Ralph distribution identity", () => {
     ]);
   });
 
-  it("discovers configuration-owned tests under .ralph", async () => {
-    const config = await read("vitest.config.ts");
-    expect(config).toContain('".ralph/**/*.test.ts"');
-    expect(config).not.toContain(".sandcastle");
-    expect(
-      await read(".ralph/agent-workflows/explore/batch.test.ts"),
-    ).toContain('describe("planEffects verdict labels"');
-  });
+  it("discovers configuration-owned tests under .ralph without executing them or legacy tests", async () => {
+    // createVitest + globTestSpecifications only: never startVitest/runFiles,
+    // collectTests, a workflow entry point, or another test runner recursively.
+    const discover = async (directory: string): Promise<string[]> => {
+      const { stdout } = await promisify(execFile)(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `import { createVitest } from "vitest/node";
+const ctx = await createVitest("test", { root: process.argv[1], config: process.argv[2], watch: false });
+try { console.log(JSON.stringify((await ctx.globTestSpecifications()).map(spec => spec.moduleId))); }
+finally { await ctx.close(); }`,
+          directory,
+          join(root, "vitest.config.ts"),
+        ],
+        { cwd: root, timeout: 15_000 },
+      );
+      return (JSON.parse(stdout) as string[])
+        .map((path) => relative(directory, path).replace(/\\/g, "/"))
+        .sort();
+    };
+    const paths = await discover(root);
+    const expected = (await readdir(join(root, ".ralph"), { recursive: true }))
+      .filter((path) => path.endsWith(".test.ts"))
+      .map((path) => `.ralph/${path.replace(/\\/g, "/")}`)
+      .sort();
+    expect(expected).toContain(".ralph/agent-workflows/explore/batch.test.ts");
+    expect(paths.filter((path) => path.startsWith(".ralph/"))).toEqual(
+      expected,
+    );
+    expect(paths.some((path) => path.startsWith(".sandcastle/"))).toBe(false);
+
+    const fixture = await mkdtemp(join(tmpdir(), "ralph-discovery-"));
+    try {
+      for (const namespace of [".ralph", ".sandcastle"]) {
+        await mkdir(join(fixture, namespace));
+        await writeFile(
+          join(fixture, namespace, "probe.test.ts"),
+          'throw new Error("Discovery must never execute this file");',
+        );
+      }
+      expect(await discover(fixture)).toEqual([".ralph/probe.test.ts"]);
+      // A harmless describe-title change cannot affect discovery. Even an
+      // invalid test module above is safe because discovery doesn't import it.
+      await writeFile(
+        join(fixture, ".ralph", "probe.test.ts"),
+        'describe("a renamed suite", () => { throw new Error("Must not execute"); });',
+      );
+      expect(await discover(fixture)).toEqual([".ralph/probe.test.ts"]);
+    } finally {
+      await rm(fixture, { recursive: true, force: true });
+    }
+  }, 20_000);
 
   it("retains upstream attribution and historical release notes", async () => {
     expect(await read("LICENSE")).toContain("Copyright (c) 2026 Matt Pocock");
