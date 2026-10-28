@@ -1047,8 +1047,9 @@ const agent = pi("claude-sonnet-4-6", {
 The sandbox override also sets Pi's `PI_CODING_AGENT_DIR` in provider env
 (and therefore applies to no-sandbox launches too). Alternatively set that
 variable in `PiOptions.env` to select the transfer destination. Explicit Pi
-overrides are applied to every launch (using POSIX `env`), including reusable
-sandboxes created before the agent was selected. Daytona forwards launch env
+overrides are applied to every launch, including reusable sandboxes created
+before the agent was selected. Host launches use the native process environment
+(including Windows/cmd.exe); Linux sandboxes use POSIX `env` regardless of host OS. Daytona forwards launch env
 through the SDK's `envVars`, overriding conflicting template env keys. Its synced
 repository lives in `ralph-workspace/` beneath the SDK work directory, not HOME
 itself; this child is initialized before the handle is returned. Credential

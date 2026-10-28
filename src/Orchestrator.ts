@@ -215,6 +215,7 @@ const invokeAgent = (
         },
         cwd: sandboxRepoDir,
         stdin: printCmd.stdin,
+        env: provider.launchEnv,
       });
 
       // Permit Pi's internal retries to recover, but never accept an unresolved

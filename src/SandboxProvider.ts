@@ -21,6 +21,8 @@ export interface InteractiveExecOptions {
   readonly stdout: NodeJS.WritableStream;
   readonly stderr: NodeJS.WritableStream;
   readonly cwd?: string;
+  /** Per-process environment overrides (host execution); sandbox adapters use POSIX env argv. */
+  readonly env?: Record<string, string>;
 }
 
 /** Handle to a running bind-mount sandbox. */
@@ -199,7 +201,7 @@ export interface NoSandboxHandle {
   /** Absolute path to the worktree on the host. */
   readonly worktreePath: string;
   /**
-   * Execute a command on the host.
+   * Execute a command on the host. `env` overrides apply to this process only.
    *
    * Implementations MUST support line-by-line streaming via `onLine`. This is
    * how Ralph delivers live feedback to the user and enforces idle timeouts —
@@ -215,6 +217,7 @@ export interface NoSandboxHandle {
       cwd?: string;
       sudo?: boolean;
       stdin?: string;
+      env?: Record<string, string>;
     },
   ): Promise<ExecResult>;
   /**

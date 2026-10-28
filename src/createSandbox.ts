@@ -59,6 +59,7 @@ import { resolveCwd } from "./resolveCwd.js";
 import { patchGitMountsForWindows } from "./mountUtils.js";
 import { assertResumeSessionExists } from "./resumePrecheck.js";
 import { provisionAgentCredentialsEffect } from "./CredentialProvision.js";
+import { prepareInteractiveLaunch } from "./LaunchEnvironment.js";
 import { toCredentialHandle } from "./SandboxProvider.js";
 import { registerShutdown } from "./shutdownRegistry.js";
 
@@ -581,6 +582,7 @@ const buildSandboxHandle = (
       }
       const interactiveExecFn =
         providerHandle.interactiveExec.bind(providerHandle);
+      const sandboxTag = ctx.credentialSandboxTag;
 
       let lifecycleResult;
       try {
@@ -646,12 +648,19 @@ const buildSandboxHandle = (
                     prompt: fullPrompt,
                     dangerouslySkipPermissions: true,
                   });
-                  const execPromise = interactiveExecFn(interactiveArgs, {
-                    stdin: process.stdin,
-                    stdout: process.stdout,
-                    stderr: process.stderr,
-                    cwd: sandboxRepoDir,
-                  });
+                  const execPromise = interactiveExecFn(
+                    ...prepareInteractiveLaunch(
+                      interactiveArgs,
+                      {
+                        stdin: process.stdin,
+                        stdout: process.stdout,
+                        stderr: process.stderr,
+                        cwd: sandboxRepoDir,
+                      },
+                      provider.launchEnv,
+                      sandboxTag,
+                    ),
+                  );
 
                   // Race exec with abort signal if provided
                   const signal = interactiveOptions.signal;

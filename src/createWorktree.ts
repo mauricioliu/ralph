@@ -56,6 +56,7 @@ import {
 } from "./PromptArgumentSubstitution.js";
 import { noSandbox } from "./sandboxes/no-sandbox.js";
 import { provisionAgentCredentialsEffect } from "./CredentialProvision.js";
+import { prepareInteractiveLaunch } from "./LaunchEnvironment.js";
 import { toCredentialHandle } from "./SandboxProvider.js";
 import { raceAbortSignal } from "./raceAbortSignal.js";
 import type { Timeouts } from "./run.js";
@@ -403,7 +404,7 @@ export const createWorktree = async (
           credentialHandle: toCredentialHandle(handle),
           signal: opts.signal,
         });
-        const sandbox = makeSandboxFromHandle(handle);
+        const sandbox = makeSandboxFromHandle(handle, resolvedSandbox.tag);
         const worktreePath = handle.worktreePath;
 
         const applyToHost =
@@ -444,12 +445,19 @@ export const createWorktree = async (
 
               const result = yield* raceAbortSignal(
                 Effect.promise(() =>
-                  interactiveExecFn(interactiveArgs, {
-                    stdin: process.stdin,
-                    stdout: process.stdout,
-                    stderr: process.stderr,
-                    cwd: worktreePath,
-                  }),
+                  interactiveExecFn(
+                    ...prepareInteractiveLaunch(
+                      interactiveArgs,
+                      {
+                        stdin: process.stdin,
+                        stdout: process.stdout,
+                        stderr: process.stderr,
+                        cwd: worktreePath,
+                      },
+                      provider.launchEnv,
+                      resolvedSandbox.tag,
+                    ),
+                  ),
                 ),
                 opts.signal,
               );
@@ -602,7 +610,7 @@ export const createWorktree = async (
         sandboxRepoDir = startResult.worktreePath;
       }
 
-      const sandbox = makeSandboxFromHandle(handle);
+      const sandbox = makeSandboxFromHandle(handle, sandboxProvider.tag);
       const applyToHost =
         sandboxProvider.tag === "isolated"
           ? () => syncOut(worktreeInfo.path, handle as IsolatedSandboxHandle)

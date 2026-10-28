@@ -35,8 +35,8 @@ interface Stage {
 }
 
 // Public-API compatibility checks: actual git/filesystem/credential/session
-// plumbing, but Pi commands are intercepted before ANY shell invocation.
-// This is a provider double, not an OAuth, container, or inference test.
+// plumbing. Pi launches execute only a temporary inert argv probe, never an
+// installed agent. This is not an OAuth, container, or inference test.
 describe("Pi reconstruction compatibility contracts", () => {
   let root: string;
   let repo: string;
@@ -46,7 +46,12 @@ describe("Pi reconstruction compatibility contracts", () => {
   let sandboxSessionsDir: string;
   let warm: Sandbox | undefined;
   let stages: Stage[];
-  let launches: { command: string; stdin?: string; cwd: string }[];
+  let launches: {
+    command: string;
+    argv: string[];
+    stdin?: string;
+    cwd: string;
+  }[];
   let creates: number;
   let closes: number;
   let events: AgentStreamEvent[];
@@ -88,14 +93,22 @@ describe("Pi reconstruction compatibility contracts", () => {
               const stage = stages.shift();
               expect(stage, "unexpected extra Pi invocation").toBeDefined();
               if (!stage) throw new Error("missing synthetic stage");
-              launches.push({ command, stdin: options?.stdin, cwd });
+              const probe = await exec("sh", ["-c", command], {
+                cwd,
+                env: {
+                  PATH: `${join(root, "bin")}:${process.env.PATH}`,
+                  HOME: root,
+                },
+              });
+              const argv = probe.stdout.split("\0").slice(0, -1);
+              launches.push({ command, argv, stdin: options?.stdin, cwd });
               expect(
                 await readFile(join(sandboxAgentDir, "auth.json"), "utf8"),
               ).toBe(await readFile(join(hostAgentDir, "auth.json"), "utf8"));
               const path = sessionPath(sandboxSessionsDir, cwd);
               let previous = "";
-              if (command.includes("--session")) {
-                expect(command).toContain(`--session '${sessionId}'`);
+              if (argv.includes("--session")) {
+                expect(argv[argv.indexOf("--session") + 1]).toBe(sessionId);
                 previous = await readFile(path, "utf8");
                 expect(JSON.parse(previous.split("\n")[0]!).cwd).toBe(cwd);
                 expect(previous).toContain('"turn":1');
@@ -190,6 +203,12 @@ describe("Pi reconstruction compatibility contracts", () => {
     sandboxSessionsDir = join(root, "sandbox-sessions");
     for (const dir of [repo, hostAgentDir])
       await mkdir(dir, { recursive: true });
+    await mkdir(join(root, "bin"));
+    await writeFile(
+      join(root, "bin", "pi"),
+      "#!/bin/sh\nprintf '%s\\0' \"$@\"",
+      { mode: 0o700 },
+    );
     await writeFile(join(hostAgentDir, "auth.json"), auth(1));
     await git(repo, "init", "-b", "main");
     await git(repo, "config", "user.name", "Fixture");
@@ -299,8 +318,9 @@ describe("Pi reconstruction compatibility contracts", () => {
         expect(result.iterations[0]!.sessionId).toBe(sessionId);
       }
       expect(launches).toHaveLength(2);
-      expect(launches[0]!.command).not.toContain("--session");
-      expect(launches[1]!.command).toContain(`--session '${sessionId}'`);
+      expect(launches[0]!.argv).not.toContain("--session");
+      const resumed = launches[1]!.argv;
+      expect(resumed[resumed.indexOf("--session") + 1]).toBe(sessionId);
       expect(launches[1]!.stdin).toContain("<result>");
       expect(launches[1]!.stdin).toMatch(/JSON|json/);
       expect(creates).toBe(2);

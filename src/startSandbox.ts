@@ -119,7 +119,7 @@ const startNoSandbox = (
   }).pipe(
     Effect.map((handle) => ({
       handle,
-      sandbox: makeSandboxFromHandle(handle),
+      sandbox: makeSandboxFromHandle(handle, options.provider.tag),
       worktreePath: handle.worktreePath,
     })),
   );
@@ -162,7 +162,7 @@ const startBindMountSandbox = (
   }).pipe(
     Effect.map((handle) => ({
       handle,
-      sandbox: makeSandboxFromHandle(handle),
+      sandbox: makeSandboxFromHandle(handle, options.provider.tag),
       worktreePath: handle.worktreePath,
     })),
     withTimeout(
@@ -249,7 +249,7 @@ const startIsolatedSandbox = (
 
     return {
       handle,
-      sandbox: makeSandboxFromHandle(handle),
+      sandbox: makeSandboxFromHandle(handle, options.provider.tag),
       worktreePath: handle.worktreePath,
     };
   });

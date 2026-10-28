@@ -30,6 +30,7 @@ import { runHostHooks, type SandboxHooks } from "./SandboxLifecycle.js";
 import { startSandbox } from "./startSandbox.js";
 import { syncOut } from "./syncOut.js";
 import { patchGitMountsForWindows } from "./mountUtils.js";
+import { preparePrintLaunch } from "./LaunchEnvironment.js";
 
 export interface ExecResult {
   readonly stdout: string;
@@ -45,6 +46,7 @@ export interface SandboxService {
       cwd?: string;
       sudo?: boolean;
       stdin?: string;
+      env?: Record<string, string>;
     },
   ) => Effect.Effect<ExecResult, ExecError>;
 
@@ -100,10 +102,19 @@ const getCopyIn = (
  */
 export const makeSandboxFromHandle = (
   handle: BindMountSandboxHandle | IsolatedSandboxHandle | NoSandboxHandle,
+  sandboxTag: SandboxProvider["tag"],
 ): SandboxService => ({
   exec: (command, options) =>
     Effect.tryPromise({
-      try: () => handle.exec(command, options),
+      try: () => {
+        if (options?.env === undefined) return handle.exec(command, options);
+        const { env, ...otherOptions } = options;
+        const launch = preparePrintLaunch(command, env, sandboxTag);
+        return handle.exec(launch.command, {
+          ...otherOptions,
+          ...(launch.env ? { env: launch.env } : {}),
+        });
+      },
       catch: (e) =>
         new ExecError({
           command,

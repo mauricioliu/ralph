@@ -61,6 +61,7 @@ export const noSandbox = (options?: NoSandboxOptions): NoSandboxProvider => ({
           cwd?: string;
           sudo?: boolean;
           stdin?: string;
+          env?: Record<string, string>;
         },
       ): Promise<ExecResult> => {
         // sudo is a no-op for no-sandbox — the user is already on the host
@@ -78,7 +79,7 @@ export const noSandbox = (options?: NoSandboxOptions): NoSandboxProvider => ({
         return new Promise((resolve, reject) => {
           const proc = spawn(shellCmd, shellArgs, {
             cwd,
-            env: processEnv,
+            env: { ...processEnv, ...opts?.env },
             stdio: [
               opts?.stdin !== undefined ? "pipe" : "ignore",
               "pipe",
@@ -146,7 +147,7 @@ export const noSandbox = (options?: NoSandboxOptions): NoSandboxProvider => ({
           // without `shell: true`, so let cmd.exe handle PATHEXT lookup.
           const proc = spawn(cmd!, rest, {
             cwd: opts.cwd ?? worktreePath,
-            env: processEnv,
+            env: { ...processEnv, ...opts.env },
             stdio: [opts.stdin, opts.stdout, opts.stderr] as StdioOptions,
             shell: process.platform === "win32",
           });

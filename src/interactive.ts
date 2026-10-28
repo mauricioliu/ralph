@@ -42,6 +42,7 @@ import {
 import { noSandbox } from "./sandboxes/no-sandbox.js";
 import { raceAbortSignal } from "./raceAbortSignal.js";
 import { provisionAgentCredentialsEffect } from "./CredentialProvision.js";
+import { prepareInteractiveLaunch } from "./LaunchEnvironment.js";
 import { toCredentialHandle } from "./SandboxProvider.js";
 import { resolveCwd } from "./resolveCwd.js";
 import type { Timeouts } from "./run.js";
@@ -369,7 +370,7 @@ export const interactive = async (
       });
 
       // Build sandbox service and run withSandboxLifecycle
-      const sandbox = makeSandboxFromHandle(handle);
+      const sandbox = makeSandboxFromHandle(handle, sandboxProvider.tag);
       const worktreePath = handle.worktreePath;
 
       const applyToHost =
@@ -409,12 +410,19 @@ export const interactive = async (
 
             const result = yield* raceAbortSignal(
               Effect.promise(() =>
-                interactiveExecFn(interactiveArgs, {
-                  stdin: process.stdin,
-                  stdout: process.stdout,
-                  stderr: process.stderr,
-                  cwd: worktreePath,
-                }),
+                interactiveExecFn(
+                  ...prepareInteractiveLaunch(
+                    interactiveArgs,
+                    {
+                      stdin: process.stdin,
+                      stdout: process.stdout,
+                      stderr: process.stderr,
+                      cwd: worktreePath,
+                    },
+                    provider.launchEnv,
+                    sandboxProvider.tag,
+                  ),
+                ),
               ),
               options.signal,
             );

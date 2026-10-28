@@ -274,6 +274,8 @@ export interface AgentProvider {
   readonly name: string;
   /** Environment variables injected by this agent provider. Merged at launch time with env resolver and sandbox provider env. */
   readonly env: Record<string, string>;
+  /** Per-launch overrides, also applied to handles created before this agent was selected. */
+  readonly launchEnv?: Record<string, string>;
   /** When true, session capture is enabled for this provider. Default: true for Claude Code, false for others. */
   readonly captureSessions: boolean;
   /** Provider-owned storage and transfer behavior for resumable agent sessions. */
@@ -685,10 +687,19 @@ export const pi = (
   name: "pi",
   env: {
     ...options?.env,
-    ...(options?.credentials?.sandboxAgentDir
+    ...(options?.credentials?.sandboxAgentDir !== undefined
       ? { PI_CODING_AGENT_DIR: options.credentials.sandboxAgentDir }
       : {}),
   },
+  launchEnv:
+    options?.credentials?.sandboxAgentDir !== undefined ||
+    options?.env?.PI_CODING_AGENT_DIR !== undefined
+      ? {
+          PI_CODING_AGENT_DIR:
+            options?.credentials?.sandboxAgentDir ??
+            options?.env?.PI_CODING_AGENT_DIR!,
+        }
+      : undefined,
   captureSessions: options?.captureSessions ?? true,
   sessionStorage: makePiSessionStorage(options),
   provisionCredentials: makePiCredentialProvisioner({
@@ -718,31 +729,14 @@ export const pi = (
     const sessionFlag = resumeSession
       ? ` --session ${shellEscape(resumeSession)}`
       : "";
-    const dir =
-      options?.credentials?.sandboxAgentDir ??
-      options?.env?.PI_CODING_AGENT_DIR;
-    const envPrefix =
-      dir === undefined
-        ? ""
-        : `env ${shellEscape(`PI_CODING_AGENT_DIR=${dir}`)} `;
     return {
-      // Reusable sandboxes are created before the agent is known. Apply the
-      // directory on each launch too, not only in sandbox creation env.
-      command: `${envPrefix}pi -p --mode json --model ${shellEscape(model)}${thinkingFlag}${sessionFlag}`,
+      command: `pi -p --mode json --model ${shellEscape(model)}${thinkingFlag}${sessionFlag}`,
       stdin: prompt,
     };
   },
 
   buildInteractiveArgs({ prompt }: AgentCommandOptions): string[] {
-    const dir =
-      options?.credentials?.sandboxAgentDir ??
-      options?.env?.PI_CODING_AGENT_DIR;
-    const args = [
-      ...(dir === undefined ? [] : ["env", `PI_CODING_AGENT_DIR=${dir}`]),
-      "pi",
-      "--model",
-      model,
-    ];
+    const args = ["pi", "--model", model];
     if (prompt) args.push(prompt);
     return args;
   },

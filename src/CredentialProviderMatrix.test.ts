@@ -21,6 +21,8 @@ import { run } from "./run.js";
 import type {
   BindMountSandboxHandle,
   IsolatedSandboxHandle,
+  NoSandboxHandle,
+  InteractiveExecOptions,
   SandboxProvider,
 } from "./SandboxProvider.js";
 
@@ -99,7 +101,14 @@ describe.each(["bind-mount", "isolated", "none"] as const)(
         captureSessions: false,
         credentials: { hostAgentDir: host },
       });
-      // No agent executable is ever spawned. Only git and local shell utilities run.
+      // Inert process-boundary probe, not an installed agent. Execute the real
+      // launch shell/environment so quoting and precedence remain observable.
+      await mkdir(join(root, "bin"));
+      await writeFile(
+        join(root, "bin", "pi"),
+        '#!/bin/sh\nprintf %s "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"',
+        { mode: 0o700 },
+      );
       const shell = async (
         command: string,
         cwd: string,
@@ -136,6 +145,7 @@ describe.each(["bind-mount", "isolated", "none"] as const)(
           PI_CODING_AGENT_DIR: "",
           ...options.env,
           HOME: home,
+          PATH: `${join(root, "bin")}:${process.env.PATH}`,
         };
         if (destinationInsideWorktree) {
           target = join(workspace, ".pi", "agent");
@@ -169,15 +179,13 @@ describe.each(["bind-mount", "isolated", "none"] as const)(
         };
         const handle = {
           worktreePath: workspace,
-          exec: vi.fn<RawHandle["exec"]>(async (command, opts) => {
+          exec: vi.fn<NoSandboxHandle["exec"]>(async (command, opts) => {
             commands.push(command);
-            if (/^(?:env .* )?pi -p /.test(command)) {
-              // Evaluate the real launch's directory selection, replacing Pi with printf.
-              const probe = command.replace(
-                /pi -p .*/,
-                "sh -c 'printf %s \"${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}\"'",
+            if (command.includes("pi -p ")) {
+              await started(
+                (await shell(command, workspace, { ...env, ...opts?.env }))
+                  .stdout,
               );
-              await started((await shell(probe, workspace, env)).stdout);
               const line = JSON.stringify({
                 type: "message_end",
                 message: {
@@ -198,14 +206,16 @@ describe.each(["bind-mount", "isolated", "none"] as const)(
               return { exitCode: 1, stdout: AUTH, stderr: AUTH };
             return shell(command, opts?.cwd ?? workspace, env);
           }),
-          interactiveExec: vi.fn(async (args: string[]) => {
-            const override =
-              args[0] === "env"
-                ? args[1]!.slice("PI_CODING_AGENT_DIR=".length)
-                : env.PI_CODING_AGENT_DIR;
-            await started(override || join(env.HOME, ".pi", "agent"));
-            return { exitCode: 0 };
-          }),
+          interactiveExec: vi.fn(
+            async (args: string[], opts: InteractiveExecOptions) => {
+              const override =
+                args[0] === "env"
+                  ? args[1]!.slice("PI_CODING_AGENT_DIR=".length)
+                  : (opts.env?.PI_CODING_AGENT_DIR ?? env.PI_CODING_AGENT_DIR);
+              await started(override || join(env.HOME, ".pi", "agent"));
+              return { exitCode: 0 };
+            },
+          ),
           // This is also present on the no-sandbox double to prove tag-based skipping.
           copyFileIn: vi.fn(async (source: string, destination: string) => {
             if (
