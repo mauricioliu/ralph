@@ -86,18 +86,19 @@ jobs:
         if: steps.batch.outputs.count != '0'
         run: npm run build
 
-      - name: Install Claude Code
+      - name: Install Pi
         if: steps.batch.outputs.count != '0'
-        run: npm install -g @anthropic-ai/claude-code
+        run: npm install -g @earendil-works/pi-coding-agent
 
       # No GH_TOKEN in this step's env: the agent has no GitHub access at all.
       - name: Run explore agent
         if: steps.batch.outputs.count != '0'
         env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          PI_AUTH_JSON: ${{ secrets.PI_AUTH_JSON }}
+          PI_MODELS_STORE_JSON: ${{ secrets.PI_MODELS_STORE_JSON }}
           ISSUES_FILE: ${{ runner.temp }}/batch/issues.json
           OUTPUT_DIR: ${{ runner.temp }}/out
-        run: npx tsx .ralph/agent-workflows/explore/explore.ts
+        run: npx tsx .ralph/agent-workflows/with-pi-auth.ts .ralph/agent-workflows/explore/explore.ts
 
       - name: Upload plan
         if: steps.batch.outputs.count != '0'

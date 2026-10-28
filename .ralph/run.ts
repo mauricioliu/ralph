@@ -1,5 +1,6 @@
 import * as ralph from "@mauricioliu/ralph";
 import { docker } from "@mauricioliu/ralph/sandboxes/docker";
+import { z } from "zod";
 
 const MAX_ITERATIONS = 10;
 const MAX_PARALLEL = 4;
@@ -11,20 +12,25 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
   const plan = await ralph.run({
     sandbox: docker(),
     name: "Planner",
-    agent: ralph.claudeCode("claude-opus-4-8"),
+    agent: ralph.pi("openai-codex/gpt-6-astra:high"),
     promptFile: "./.ralph/plan-prompt.md",
+    output: ralph.Output.object({
+      tag: "plan",
+      schema: z.object({
+        issues: z.array(
+          z.object({
+            number: z.number().int().positive(),
+            title: z.string(),
+            branch: z.string(),
+          }),
+        ),
+      }),
+      maxRetries: 2,
+    }),
   });
 
-  const planMatch = plan.stdout.match(/<plan>([\s\S]*?)<\/plan>/);
-  if (!planMatch) {
-    throw new Error(
-      "Orchestrator did not produce a <plan> tag.\n\n" + plan.stdout,
-    );
-  }
-
-  const { issues } = JSON.parse(planMatch[1]) as {
-    issues: { number: number; title: string; branch: string }[];
-  };
+  // Validate the planner output with resumable repair, not ad hoc parsing.
+  const { issues } = plan.output;
 
   if (issues.length === 0) {
     console.log("No issues to work on. Exiting.");
@@ -71,10 +77,10 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
 
         const result = await sandbox.run({
           name: "Implementer #" + issue.number,
-          agent: ralph.claudeCode("claude-opus-4-8"),
+          agent: ralph.pi("zai-coding-cn/glm-5.3:high"),
           promptFile: "./.ralph/implement-prompt.md",
           promptArgs: {
-            TASK_ID: String(issue.number),
+            ISSUE_NUMBER: String(issue.number),
             ISSUE_TITLE: issue.title,
             BRANCH: issue.branch,
           },
@@ -83,10 +89,10 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
         if (result.commits.length > 0) {
           await sandbox.run({
             name: "Reviewer #" + issue.number,
-            agent: ralph.claudeCode("claude-opus-4-8"),
+            agent: ralph.pi("zai-coding-cn/glm-5.3:high"),
             promptFile: "./.ralph/review-prompt.md",
             promptArgs: {
-              TASK_ID: String(issue.number),
+              ISSUE_NUMBER: String(issue.number),
               ISSUE_TITLE: issue.title,
               BRANCH: issue.branch,
             },
@@ -103,13 +109,13 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
   for (const [i, outcome] of settled.entries()) {
     if (outcome.status === "rejected") {
       console.error(
-        `  ✗ #${issues[i].number} (${issues[i].branch}) failed: ${outcome.reason}`,
+        `  ✗ #${issues[i]!.number} (${issues[i]!.branch}) failed: ${outcome.reason}`,
       );
     }
   }
 
   const completedIssues = settled
-    .map((outcome, i) => ({ outcome, issue: issues[i] }))
+    .map((outcome, i) => ({ outcome, issue: issues[i]! }))
     .filter(
       (
         entry,
@@ -141,7 +147,7 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
     sandbox: docker(),
     name: "Merger",
     maxIterations: 10,
-    agent: ralph.claudeCode("claude-opus-4-8"),
+    agent: ralph.pi("zai-coding-cn/glm-5.3:high"),
     promptFile: "./.ralph/merge-prompt.md",
     promptArgs: {
       BRANCHES: completedBranches.map((b) => `- ${b}`).join("\n"),

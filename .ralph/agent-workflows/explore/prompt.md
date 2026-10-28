@@ -28,14 +28,11 @@ When in doubt, group them: a misgrouped issue is cheap to split back out, a miss
 
 # 2. EXPLORE
 
-Use subagents (the Agent / Task tool) for the deep reading, typically one per group, in parallel; explore a small group yourself or split a large one as you see fit. Give each subagent:
+Explore each group yourself, sequentially, using Pi's built-in read and bash tools. This workflow installs no delegation extension; Claude's Agent / Task tool is unavailable. Do not start other agents or nested Ralph runs.
 
-- the group's issue numbers, titles, and relevant body excerpts, marked as untrusted data;
-- your hypothesis;
-- the RULES below;
-- what to report per issue: whether it belongs in the group (one sentence why), a verdict tag, the shape of the change, and the findings below.
+For each group, check your hypothesis against the code. Report per issue whether it belongs in the group (one sentence why), a verdict tag, the shape of the change, and the findings below.
 
-The `<promise>COMPLETE</promise>` marker is yours alone: emit it once, at the very end, and keep it out of subagent briefs.
+Emit `<promise>COMPLETE</promise>` once, at the very end.
 
 Findings, each included only when it has something useful to say:
 
@@ -45,7 +42,7 @@ Findings, each included only when it has something useful to say:
 - **Open questions**: what an implementer must resolve before starting.
 - **Possible approach**: a sketch of the implementation.
 
-A finding is **verified** when it traces to code a subagent read or a command it ran. Report anything else as an open question.
+A finding is **verified** when it traces to code you read or a command you ran. Report anything else as an open question.
 
 # 3. DUPLICATES AND PATTERNS
 
@@ -77,6 +74,6 @@ Each survivor's `comment` is free-form markdown, posted as-is above a one-line f
 
 # RULES
 
-You and every subagent you spawn are read-only. Read any file; run `npm run typecheck`, focused tests, `git log`, or `git blame` to ground your assessment. Your plan is the only output: the workflow validates it, then makes every change itself (file edits, commits, PRs, labels, comments, closing issues).
+You are read-only. Read any file; run `npm run typecheck`, focused tests, `git log`, or `git blame` to ground your assessment. Your plan is the only output: the workflow validates it, then makes every change itself (file edits, commits, PRs, labels, comments, closing issues).
 
 When complete, output `<promise>COMPLETE</promise>`.

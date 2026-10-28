@@ -1,13 +1,10 @@
 import * as ralph from "@mauricioliu/ralph";
-import { noSandbox } from "@mauricioliu/ralph/sandboxes/no-sandbox";
-
-// /matt-pococks-projects/ralph
 const { commits, branch } = await ralph.interactive({
   branchStrategy: {
     type: "merge-to-head",
   },
   name: "Test",
-  agent: ralph.claudeCode("claude-sonnet-4-6"),
+  agent: ralph.pi("zai-coding-cn/glm-5.3:high"),
   prompt: "Add /foobar to the .gitignore, then commit.",
   copyToWorktree: ["node_modules"],
 });

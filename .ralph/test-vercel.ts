@@ -1,8 +1,9 @@
 import * as ralph from "@mauricioliu/ralph";
 import { vercel } from "@mauricioliu/ralph/sandboxes/vercel";
 
-const claudeInstallHook = {
-  command: "curl -fsSL https://claude.ai/install.sh | bash",
+const piInstallHook = {
+  command: "npm install -g @earendil-works/pi-coding-agent",
+  sudo: true,
 };
 
 const ghCliInstallHook = {
@@ -19,12 +20,12 @@ const { commits, branch } = await ralph.run({
     projectId: "ralph",
   }),
   name: "Test",
-  agent: ralph.claudeCode("claude-sonnet-4-6"),
+  agent: ralph.pi("zai-coding-cn/glm-5.3:high"),
   prompt: "Add /foobar to the .gitignore, then commit.",
   hooks: {
     sandbox: {
       onSandboxReady: [
-        claudeInstallHook,
+        piInstallHook,
         ghCliInstallHook,
         {
           command: "npm install && npm run build",

@@ -64,7 +64,7 @@ describe("upstream PR workflow security survives the namespace change", () => {
         "ref: ${{ github.event.pull_request.head.sha }}",
       );
       expect(workflow).toContain(
-        `npx tsx .ralph/agent-workflows/${name.slice("agent-".length)}/${name.slice("agent-".length)}.ts`,
+        `npx tsx .ralph/agent-workflows/with-pi-auth.ts .ralph/agent-workflows/${name.slice("agent-".length)}/${name.slice("agent-".length)}.ts`,
       );
       expect(workflow).not.toContain(".sandcastle");
     },
@@ -86,7 +86,7 @@ describe("upstream PR workflow security survives the namespace change", () => {
       "ref: ${{ github.event.pull_request.head.sha }}",
     );
     expect(workflow).toContain(
-      "npx tsx .ralph/agent-workflows/update-branch/update-branch.ts",
+      "npx tsx .ralph/agent-workflows/with-pi-auth.ts .ralph/agent-workflows/update-branch/update-branch.ts",
     );
   });
 });

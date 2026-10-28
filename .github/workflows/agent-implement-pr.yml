@@ -71,16 +71,17 @@ jobs:
         if: github.event.pull_request.state == 'open'
         run: npm run build
 
-      - name: Install Claude Code
+      - name: Install Pi
         if: github.event.pull_request.state == 'open'
-        run: npm install -g @anthropic-ai/claude-code
+        run: npm install -g @earendil-works/pi-coding-agent
 
       - name: Run implement-PR agent
         if: github.event.pull_request.state == 'open'
         env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          PI_AUTH_JSON: ${{ secrets.PI_AUTH_JSON }}
+          PI_MODELS_STORE_JSON: ${{ secrets.PI_MODELS_STORE_JSON }}
           OUTPUT_DIR: ${{ runner.temp }}
-        run: npx tsx .ralph/agent-workflows/implement-pr/implement-pr.ts
+        run: npx tsx .ralph/agent-workflows/with-pi-auth.ts .ralph/agent-workflows/implement-pr/implement-pr.ts
 
       - name: Push branch
         if: github.event.pull_request.state == 'open' && success()

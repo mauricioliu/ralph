@@ -2,14 +2,14 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as ralph from "@mauricioliu/ralph";
 import { noSandbox } from "@mauricioliu/ralph/sandboxes/no-sandbox";
-import { claudeAgent, fail, required, writeJson } from "../shared/common";
+import { piAgent, fail, required, writeJson } from "../shared/common";
 import { runWithExtraction } from "../shared/run-with-extraction";
 import { parseBatch, planSchema, renderIssues } from "./batch";
 
 /**
  * Batch explore: ONE orchestrating agent reads every open `agent:explore`
- * issue, groups them by likely shared root cause, spawns its own subagents
- * to explore the groups, confirms membership, and produces one validated
+ * issue, groups them by likely shared root cause, explores the groups
+ * sequentially, confirms membership, and produces one validated
  * plan. Read-only — writes `plan.json` to OUTPUT_DIR; `apply.ts` (in a
  * separate job) is the only thing that touches GitHub.
  */
@@ -35,7 +35,7 @@ try {
   // repair attempt.
   const plan = await runWithExtraction({
     name: "explore-batch",
-    agent: claudeAgent(),
+    agent: piAgent("planner"),
     sandbox: noSandbox(),
     logging: { type: "stdout" },
     promptFile: promptPath("prompt.md"),

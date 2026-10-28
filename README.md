@@ -1479,8 +1479,14 @@ hooks: {
 npm install
 npm run build    # Bundle with tsup
 npm test         # Run tests with vitest
-npm run typecheck # Type-check
+npm run typecheck # Type-check library and dogfood scripts (build first)
 ```
+
+The repository's own `.ralph` scripts and agent workflows use Pi with the same
+planner/worker split as init. See [dogfood setup and limitations](.ralph/README.md)
+for host credential transfer, CI secrets, sequential exploration and the boundary
+between offline checks and real-agent smoke runs. The `ralph`, `test-podman`,
+`test-vercel` and `test-interactive` npm scripts are **not** offline tests.
 
 ## License
 

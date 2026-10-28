@@ -40,7 +40,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:package": "node scripts/smoke-package.mjs",
-    "typecheck": "tsgo --noEmit",
+    "typecheck": "tsgo --noEmit && tsgo --project tsconfig.dogfood.json",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "prepare": "husky",
