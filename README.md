@@ -4,7 +4,7 @@ Ralph is a reconstruction of [Sandcastle](https://github.com/mattpocock/sandcast
 
 The package is `@mauricioliu/ralph`, the CLI is `ralph`, and per-repository configuration lives in `.ralph/`. Existing Sandcastle consumers must update imports, commands and config paths (including prompts and scripts); there is no automatic migration or legacy `.sandcastle` fallback. The inherited version remains `0.12.0`, not the old fork's `0.8.0`; release versioning and publication remain pending.
 
-For local validation after `npm ci`, run `npm run build`, `npm run typecheck`, `npm test`, and `npm run test:package`. The package smoke check uses a temporary home and offline npm cache, installs a local tarball, checks CLI/public imports, and compiles all five scaffolds in ESM and non-ESM projects without executing them. It needs the runtime dependencies and Zod in the npm cache; it never publishes, launches agents or starts sandbox services. See [the ticket #10 validation receipt](docs/rebuild/ticket-10.md).
+For local validation after `npm ci`, run `npm run build`, `npm run typecheck`, `npm test`, and `npm run test:package`. The package smoke check uses a temporary home and offline npm cache, installs a local tarball, checks CLI/public imports, and compiles all five scaffolds in ESM and non-ESM projects for Pi defaults, an explicit Pi model override, and all five alternative agents (70 scaffolds), without executing them. It needs the runtime dependencies and Zod in the npm cache; it never publishes, launches agents or starts sandbox services. See [the ticket #10 validation receipt](docs/rebuild/ticket-10.md).
 
 ## What Is Ralph?
 
@@ -33,13 +33,15 @@ Ralph is provider-agnostic — it ships with built-in providers for Docker, Podm
 npm install --save-dev @mauricioliu/ralph
 ```
 
-2. Run `npx @mauricioliu/ralph init`. This scaffolds a `.ralph` directory with all the files needed.
+2. Run `npx @mauricioliu/ralph init`. This scaffolds a `.ralph` directory with all the files needed. Pi is preselected; Claude Code, Codex, Cursor, OpenCode and Copilot remain available.
 
 ```bash
 npx @mauricioliu/ralph init
 ```
 
-3. Copy `.ralph/.env.example` to `.ralph/.env`, then fill in your default values for `CLAUDE_CODE_OAUTH_TOKEN` (run `claude setup-token` on your host to get one). To use an Anthropic API key instead, uncomment and fill in `ANTHROPIC_API_KEY`.
+3. For Pi, install `@earendil-works/pi-coding-agent` on the **host**, run `pi`, then `/login` for `openai-codex` and `zai-coding-cn`. The subscription defaults do **not** require API keys in `.ralph/.env`. Ralph transfers the host's `auth.json` and optional `models-store.json` into each sandbox before launch; the host stays authoritative and sandbox refreshes are never copied back. See [Pi sandbox credentials](#pi-sandbox-credentials) for paths, overrides and security limits. Never commit credential files.
+
+   Copy `.ralph/.env.example` to `.ralph/.env` if your issue tracker needs variables (e.g. `GH_TOKEN` for GitHub Issues). If you selected Claude Code instead, set `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` on the host, or uncomment `ANTHROPIC_API_KEY`. Codex uses `CODEX_API_KEY`. Other agents keep their own auth requirements.
 
 ```bash
 cp .ralph/.env.example .ralph/.env
@@ -53,11 +55,11 @@ npx tsx .ralph/main.ts
 
 ```typescript
 // 4. Run the agent via the JS API
-import { run, claudeCode } from "@mauricioliu/ralph";
+import { run, pi } from "@mauricioliu/ralph";
 import { docker } from "@mauricioliu/ralph/sandboxes/docker";
 
 await run({
-  agent: claudeCode("claude-opus-4-8"),
+  agent: pi("zai-coding-cn/glm-5.3:high"),
   sandbox: docker(), // or podman(), vercel(), or your own provider
   promptFile: ".ralph/prompt.md",
 });
@@ -763,6 +765,10 @@ try {
 
 Select a template during `ralph init` when prompted, or re-run init in a fresh repo to try a different one.
 
+Pi templates use `openai-codex/gpt-6-astra:high` for the **planner** and `zai-coding-cn/glm-5.3:high` for **workers**: implementer, reviewer, merger, and the individual agent in `blank`/`simple-loop`. The `:high` suffix sets Pi's thinking level. The templates are the source of truth; customize each role in the generated `main.ts`/`main.mts`.
+
+Selecting Pi without `--model` preserves this split. An explicit `--model` replaces **every** role's model, even when equal to the worker default. Selecting another agent replaces every factory and uses that agent's default model (or the explicit `--model`). Sandbox selection and ESM filename detection still apply in all cases. Existing scaffolds are not migrated.
+
 ## CLI commands
 
 ### `ralph init`
@@ -773,17 +779,27 @@ Init detects your host package manager (npm, pnpm, yarn, or bun) from a `package
 
 Every interactive prompt has a paired `--flag` so the entire init can run non-interactively (e.g. in CI or a scripted setup). When stdin is not a TTY and a required flag is missing, init fails fast with a clear error rather than wedging on a prompt.
 
-| Option                    | Required | Default                 | Description                                                                                                |
-| ------------------------- | -------- | ----------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `--image-name`            | No       | `ralph:<repo-dir-name>` | Docker image name                                                                                          |
-| `--agent`                 | No       | Interactive prompt      | Agent to use (`claude-code`, `pi`, `codex`, `cursor`, `opencode`, `copilot`)                               |
-| `--model`                 | No       | Agent's default model   | Model to use (e.g. `claude-sonnet-4-6`). Defaults to agent's default                                       |
-| `--sandbox`               | No       | Interactive prompt      | Sandbox provider to use (`docker`, `podman`)                                                               |
-| `--template`              | No       | Interactive prompt      | Template to scaffold (e.g. `blank`, `simple-loop`)                                                         |
-| `--issue-tracker`         | No       | Interactive prompt      | Issue tracker to use (`github-issues`, `beads`, `custom`)                                                  |
-| `--create-label`          | No       | Interactive prompt      | `true` / `false` — whether to create the `Ralph` GitHub label (only with `--issue-tracker github-issues`)  |
-| `--build-image`           | No       | Interactive prompt      | `true` / `false` — whether to build the sandbox image now (silently ignored with `--issue-tracker custom`) |
-| `--install-template-deps` | No       | Interactive prompt      | `true` / `false` — whether to install template host deps (e.g. `zod` for the planner templates)            |
+| Option                    | Required | Default                                    | Description                                                                                                |
+| ------------------------- | -------- | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
+| `--image-name`            | No       | `ralph:<repo-dir-name>`                    | Docker image name                                                                                          |
+| `--agent`                 | No       | Interactive prompt (Pi preselected)        | Agent to use (`pi`, `claude-code`, `codex`, `cursor`, `opencode`, `copilot`); required without a TTY       |
+| `--model`                 | No       | Pi template split; otherwise agent default | Explicit model for **all** roles (e.g. `zai-coding-cn/glm-5.3:high`)                                       |
+| `--sandbox`               | No       | Interactive prompt                         | Sandbox provider to use (`docker`, `podman`)                                                               |
+| `--template`              | No       | Interactive prompt                         | Template to scaffold (e.g. `blank`, `simple-loop`)                                                         |
+| `--issue-tracker`         | No       | Interactive prompt                         | Issue tracker to use (`github-issues`, `beads`, `custom`)                                                  |
+| `--create-label`          | No       | Interactive prompt                         | `true` / `false` — whether to create the `Ralph` GitHub label (only with `--issue-tracker github-issues`)  |
+| `--build-image`           | No       | Interactive prompt                         | `true` / `false` — whether to build the sandbox image now (silently ignored with `--issue-tracker custom`) |
+| `--install-template-deps` | No       | Interactive prompt                         | `true` / `false` — whether to install template host deps (e.g. `zod` for the planner templates)            |
+
+For a non-interactive scaffold without label creation, dependency installation, image builds or agent execution:
+
+```bash
+npx @mauricioliu/ralph init --agent pi --template parallel-planner \
+  --sandbox docker --issue-tracker github-issues --create-label false \
+  --build-image false --install-template-deps false
+```
+
+This only scaffolds files; install the template's host dependencies, authenticate Pi and build the image separately before running it. No real-provider/OAuth validation is performed by init or the offline scaffold tests.
 
 Creates the following files:
 

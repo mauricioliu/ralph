@@ -1,7 +1,7 @@
 // Parallel Planner with Review — four-phase orchestration loop
 //
 // This template drives a multi-phase workflow:
-//   Phase 1 (Plan):             An opus agent analyzes open issues, builds a
+//   Phase 1 (Plan):             The planner analyzes open issues, builds a
 //                               dependency graph, and outputs a <plan> JSON
 //                               listing unblocked issues with branch names.
 //   Phase 2 (Execute + Review): For each issue, a sandbox is created via
@@ -64,7 +64,7 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
   // -------------------------------------------------------------------------
   // Phase 1: Plan
   //
-  // The planning agent (opus, for deeper reasoning) reads the open issue list,
+  // The planner (using the planner model for deeper reasoning) reads the open issue list,
   // builds a dependency graph, and selects the issues that can be worked in
   // parallel right now (i.e., no blocking dependencies on other open issues).
   //
@@ -77,8 +77,8 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
     // One iteration is enough: the planner just needs to read and reason,
     // not write code. (Structured output requires maxIterations: 1.)
     maxIterations: 1,
-    // Opus for planning: dependency analysis benefits from deeper reasoning.
-    agent: ralph.claudeCode("claude-opus-4-8"),
+    // The planner model: dependency analysis benefits from deeper reasoning.
+    agent: ralph.pi("openai-codex/gpt-6-astra:high"),
     promptFile: "./.ralph/plan-prompt.md",
     // Extract and validate the <plan> JSON into a typed object. Throws
     // StructuredOutputError if the tag is missing, the JSON is malformed, or
@@ -125,7 +125,7 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
         const implement = await sandbox.run({
           name: "implementer",
           maxIterations: 100,
-          agent: ralph.claudeCode("claude-sonnet-4-6"),
+          agent: ralph.pi("zai-coding-cn/glm-5.3:high"),
           promptFile: "./.ralph/implement-prompt.md",
           promptArgs: {
             TASK_ID: issue.id,
@@ -139,7 +139,7 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
           const review = await sandbox.run({
             name: "reviewer",
             maxIterations: 1,
-            agent: ralph.claudeCode("claude-sonnet-4-6"),
+            agent: ralph.pi("zai-coding-cn/glm-5.3:high"),
             promptFile: "./.ralph/review-prompt.md",
             promptArgs: {
               BRANCH: issue.branch,
@@ -210,7 +210,7 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
     sandbox: docker(),
     name: "merger",
     maxIterations: 1,
-    agent: ralph.claudeCode("claude-sonnet-4-6"),
+    agent: ralph.pi("zai-coding-cn/glm-5.3:high"),
     promptFile: "./.ralph/merge-prompt.md",
     promptArgs: {
       // A markdown list of branch names, one per line.

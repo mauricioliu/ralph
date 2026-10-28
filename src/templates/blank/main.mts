@@ -1,4 +1,4 @@
-import { run, claudeCode } from "@mauricioliu/ralph";
+import { run, pi } from "@mauricioliu/ralph";
 import { docker } from "@mauricioliu/ralph/sandboxes/docker";
 
 // Blank template: customize this to build your own orchestration.
@@ -6,7 +6,7 @@ import { docker } from "@mauricioliu/ralph/sandboxes/docker";
 // Or add to package.json scripts: "ralph": "npx tsx .ralph/main.mts"
 
 await run({
-  agent: claudeCode("claude-opus-4-8"),
+  agent: pi("zai-coding-cn/glm-5.3:high"),
   sandbox: docker(),
   promptFile: "./.ralph/prompt.md",
 });

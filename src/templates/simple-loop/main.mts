@@ -1,4 +1,4 @@
-import { run, claudeCode } from "@mauricioliu/ralph";
+import { run, pi } from "@mauricioliu/ralph";
 import { docker } from "@mauricioliu/ralph/sandboxes/docker";
 
 // Simple loop: an agent that picks open issues one by one and closes them.
@@ -12,10 +12,9 @@ await run({
   // Sandbox provider — runs the agent inside an isolated container.
   sandbox: docker(),
 
-  // The agent provider. Pass a model string to claudeCode() — sonnet balances
-  // capability and speed for most tasks. Switch to claude-opus-4-8 for harder
-  // problems, or claude-haiku-4-5-20251001 for speed.
-  agent: claudeCode("claude-sonnet-4-6"),
+  // The lone agent uses the worker model. Edit this string to customize it;
+  // the ":high" suffix sets Pi's thinking level inline.
+  agent: pi("zai-coding-cn/glm-5.3:high"),
 
   // Path to the prompt file. Shell expressions inside are evaluated inside the
   // sandbox at the start of each iteration, so the agent always sees fresh data.

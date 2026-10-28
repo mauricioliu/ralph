@@ -189,60 +189,148 @@ try {
   `,
   );
   const mains = [publicApiFixture];
-  for (const type of ["module", "commonjs"]) {
-    for (const [i, template] of templates.entries()) {
-      const cwd = join(fixture, `${template}-${type}`);
-      await mkdir(cwd);
-      await writeFile(
-        join(cwd, "package.json"),
-        JSON.stringify({ private: true, type }),
-      );
-      const sandbox = i % 2 === 0 ? "docker" : "podman";
-      exec(
-        process.execPath,
-        [
-          cli,
-          "init",
-          "--agent",
-          "pi",
-          "--model",
-          "fixture-provider/fixture-model",
-          "--template",
-          template,
-          "--sandbox",
-          sandbox,
-          "--issue-tracker",
-          "github-issues",
-          "--create-label",
-          "false",
-          "--build-image",
-          "false",
-          "--install-template-deps",
-          "false",
-        ],
-        cwd,
-      );
-      assert(!(await readdir(cwd)).includes(".sandcastle"));
-      const configDir = join(cwd, ".ralph");
-      const main = join(configDir, type === "module" ? "main.ts" : "main.mts");
-      mains.push(main);
-      const source = await readFile(main, "utf8");
-      assert(source.includes('"@mauricioliu/ralph"'));
-      assert(source.includes(`"@mauricioliu/ralph/sandboxes/${sandbox}"`));
-      for (const name of await readdir(configDir)) {
-        const contents = await readFile(join(configDir, name), "utf8");
-        assert(
-          !/sandcastle/i.test(contents),
-          `${template}/${name} has a stale namespace`,
+  const scenarios = [
+    { name: "pi-default", agent: "pi", factory: "pi" },
+    {
+      name: "pi-override",
+      agent: "pi",
+      factory: "pi",
+      model: "fixture-provider/fixture-model",
+    },
+    {
+      name: "claude",
+      agent: "claude-code",
+      factory: "claudeCode",
+      defaultModel: "claude-opus-4-8",
+      key: "CLAUDE_CODE_OAUTH_TOKEN=",
+    },
+    {
+      name: "codex",
+      agent: "codex",
+      factory: "codex",
+      defaultModel: "gpt-5.4",
+      key: "CODEX_API_KEY=",
+    },
+    {
+      name: "cursor",
+      agent: "cursor",
+      factory: "cursor",
+      defaultModel: "composer-2",
+      key: "CURSOR_API_KEY=",
+    },
+    {
+      name: "opencode",
+      agent: "opencode",
+      factory: "opencode",
+      defaultModel: "opencode/big-pickle",
+      key: "OPENCODE_API_KEY=",
+    },
+    {
+      name: "copilot",
+      agent: "copilot",
+      factory: "copilot",
+      defaultModel: "claude-sonnet-4.5",
+      key: "GITHUB_TOKEN=",
+    },
+  ];
+  for (const scenario of scenarios) {
+    for (const type of ["module", "commonjs"]) {
+      for (const [i, template] of templates.entries()) {
+        const cwd = join(fixture, `${template}-${type}-${scenario.name}`);
+        await mkdir(cwd);
+        await writeFile(
+          join(cwd, "package.json"),
+          JSON.stringify({ private: true, type }),
         );
+        const sandbox = i % 2 === 0 ? "docker" : "podman";
+        exec(
+          process.execPath,
+          [
+            cli,
+            "init",
+            "--agent",
+            scenario.agent,
+            ...(scenario.model === undefined
+              ? []
+              : ["--model", scenario.model]),
+            "--template",
+            template,
+            "--sandbox",
+            sandbox,
+            "--issue-tracker",
+            "github-issues",
+            "--create-label",
+            "false",
+            "--build-image",
+            "false",
+            "--install-template-deps",
+            "false",
+          ],
+          cwd,
+        );
+        assert(!(await readdir(cwd)).includes(".sandcastle"));
+        const configDir = join(cwd, ".ralph");
+        const main = join(
+          configDir,
+          type === "module" ? "main.ts" : "main.mts",
+        );
+        mains.push(main);
+        const source = await readFile(main, "utf8");
+        assert(source.includes('"@mauricioliu/ralph"'));
+        assert(source.includes(`"@mauricioliu/ralph/sandboxes/${sandbox}"`));
+        const calls = [
+          ...source.matchAll(/\bagent:\s*(?:ralph\.)?(\w+)\("([^"]+)"\)/g),
+        ];
+        assert.equal(calls.length, [1, 1, 2, 3, 4][i]);
+        for (const [callIndex, call] of calls.entries()) {
+          assert.equal(call[1], scenario.factory);
+          const expectedModel =
+            scenario.model ??
+            scenario.defaultModel ??
+            (template.startsWith("parallel-planner") && callIndex === 0
+              ? "openai-codex/gpt-6-astra:high"
+              : "zai-coding-cn/glm-5.3:high");
+          assert.equal(call[2], expectedModel);
+        }
+        const envExample = await readFile(
+          join(configDir, ".env.example"),
+          "utf8",
+        );
+        if (scenario.key) assert(envExample.includes(scenario.key));
+        if (scenario.agent === "codex")
+          assert(!envExample.includes("OPENAI_KEY="));
+        if (scenario.agent === "claude-code") {
+          assert(envExample.includes("claude setup-token"));
+          assert(envExample.includes("# ANTHROPIC_API_KEY="));
+        }
+        if (scenario.agent === "pi") {
+          assert(!/^[A-Z_]*API_KEY=/m.test(envExample));
+          assert(envExample.includes("/login"));
+          const imageSource = await readFile(
+            join(
+              configDir,
+              sandbox === "docker" ? "Dockerfile" : "Containerfile",
+            ),
+            "utf8",
+          );
+          assert(imageSource.includes("@earendil-works/pi-coding-agent"));
+          assert(!imageSource.includes("@mariozechner/pi-coding-agent"));
+        }
+        for (const name of await readdir(configDir)) {
+          const contents = await readFile(join(configDir, name), "utf8");
+          assert(
+            !/sandcastle/i.test(contents),
+            `${template}/${name} has a stale namespace`,
+          );
+        }
+        const configFiles = await readdir(configDir);
+        assert(
+          configFiles.includes(
+            sandbox === "docker" ? "Dockerfile" : "Containerfile",
+          ),
+        );
+        assert(!configFiles.includes(".env"));
       }
-      const configFiles = await readdir(configDir);
-      assert(
-        configFiles.includes(
-          sandbox === "docker" ? "Dockerfile" : "Containerfile",
-        ),
-      );
-      assert(!configFiles.includes(".env"));
     }
   }
   // Compile, don't import/execute, the generated entry points. Resolve their
@@ -268,7 +356,7 @@ try {
     }),
   );
   console.log(
-    `PASS @mauricioliu/ralph@${pkg.version}: offline tarball installation, CLI, all public imports, credential API types, 10 compiled scaffolds; no agent/provider execution.`,
+    `PASS @mauricioliu/ralph@${pkg.version}: offline tarball installation, CLI, all public imports, credential API types, 70 compiled scaffolds (Pi defaults/override and all alternate agents); no agent/provider execution.`,
   );
 } finally {
   await rm(temp, { recursive: true, force: true });

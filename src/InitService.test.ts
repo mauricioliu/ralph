@@ -72,7 +72,7 @@ describe("InitService scaffold", () => {
     },
     {
       agent: piAgent,
-      expectedKey: "ANTHROPIC_API_KEY=",
+      expectedKey: "# Pi subscription models do not require API keys here.",
       unexpectedKey: "CODEX_API_KEY=",
       expectClaudeSetupTokenHint: false,
     },
@@ -330,7 +330,7 @@ describe("InitService scaffold", () => {
     expect(mainTs).toContain("maxIterations");
     expect(mainTs).toContain("3");
     // When scaffolded with default model, simple-loop uses claude-opus-4-8
-    // (rewritten from template's claude-sonnet-4-6)
+    // (rewritten from the template's Pi worker model)
     expect(mainTs).toContain("promptFile");
     expect(mainTs).toContain("npm install");
     expect(mainTs).toContain("onSandboxReady");
@@ -750,7 +750,8 @@ describe("InitService scaffold", () => {
       "utf-8",
     );
     expect(dockerfile).toContain("FROM node:22-bookworm");
-    expect(dockerfile).toContain("@mariozechner/pi-coding-agent");
+    expect(dockerfile).toContain("@earendil-works/pi-coding-agent");
+    expect(dockerfile).not.toContain("@mariozechner/pi-coding-agent");
     expect(dockerfile).not.toContain("{{ISSUE_TRACKER_TOOLS}}");
   });
 
@@ -2019,7 +2020,8 @@ describe("InitService scaffold", () => {
         "utf-8",
       );
       expect(dockerfile).toContain("beads");
-      expect(dockerfile).toContain("@mariozechner/pi-coding-agent");
+      expect(dockerfile).toContain("@earendil-works/pi-coding-agent");
+      expect(dockerfile).not.toContain("@mariozechner/pi-coding-agent");
       expect(dockerfile).not.toContain("GitHub CLI");
     });
   });

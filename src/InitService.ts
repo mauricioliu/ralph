@@ -191,9 +191,14 @@ export interface AgentEntry {
   readonly name: string;
   readonly label: string;
   readonly defaultModel: string;
+  /** Model pair shown in init; the templates own the role-specific defaults. */
+  readonly defaultModels?: {
+    readonly planner: string;
+    readonly worker: string;
+  };
   readonly factoryImport: string;
   readonly dockerfileTemplate: string;
-  /** Lines to include in the generated `.env.example` for this agent's API key. */
+  /** Lines to include in the generated `.env.example` for this agent's auth. */
   readonly envExample: string;
   /**
    * Copy-pasteable interactive command that feeds the custom-issue-tracker
@@ -260,7 +265,7 @@ ARG AGENT_GID=1000
 RUN groupmod -o -g $AGENT_GID node && usermod -o -u $AGENT_UID -g $AGENT_GID -d /home/agent -m -l agent node
 
 # Install pi coding agent (run as root before USER agent)
-RUN npm install -g @mariozechner/pi-coding-agent
+RUN npm install -g @earendil-works/pi-coding-agent
 
 USER \${AGENT_UID}:\${AGENT_GID}
 
@@ -423,11 +428,19 @@ CLAUDE_CODE_OAUTH_TOKEN=
   {
     name: "pi",
     label: "Pi",
-    defaultModel: "claude-sonnet-4-6",
+    defaultModel: "zai-coding-cn/glm-5.3:high",
+    defaultModels: {
+      planner: "openai-codex/gpt-6-astra:high",
+      worker: "zai-coding-cn/glm-5.3:high",
+    },
     factoryImport: "pi",
     dockerfileTemplate: PI_DOCKERFILE,
-    envExample: `# Anthropic API key
-ANTHROPIC_API_KEY=`,
+    envExample: `# Pi subscription models do not require API keys here.
+# Authenticate on the host: run pi, then /login for openai-codex and zai-coding-cn.
+# Ralph transfers auth.json and optional models-store.json from PI_CODING_AGENT_DIR
+# (default ~/.pi/agent) into each sandbox before launch; the host stays authoritative.
+# Sandbox refreshes are never copied back. Never commit credential files.
+# For an explicit --model override, configure that model's auth in Pi on the host.`,
     setupCommand: `pi "$(cat ${SETUP_ISSUE_TRACKER_PATH})"`,
   },
   {
@@ -626,6 +639,22 @@ export function getNextStepsLines(
   agent: AgentEntry,
   packageManager: PackageManager,
 ): string[] {
+  const piAuthLines =
+    agent.name === "pi"
+      ? [
+          "   On the host, run `pi`, then `/login` for openai-codex and zai-coding-cn. Subscription defaults do not need API keys in .ralph/.env.",
+          "   Ralph transfers auth.json and optional models-store.json from PI_CODING_AGENT_DIR (default ~/.pi/agent) before each sandbox launch. The host stays authoritative; sandbox refreshes are never copied back. Never commit credentials.",
+          "   If you override the model, configure its authentication in Pi on the host instead.",
+        ]
+      : [];
+  const authStep =
+    agent.name === "pi"
+      ? "Authenticate Pi on the host" +
+        (issueTracker.envExample
+          ? "; set your issue tracker's env vars in .ralph/.env (see .ralph/.env.example)"
+          : " (see .ralph/.env.example)")
+      : "Set the required env vars in .ralph/.env (see .ralph/.env.example)";
+
   // The custom issue tracker scaffolds a broken-until-configured project, so
   // its next steps are about running the setup prompt — not the template's
   // normal "set env vars and go" flow. This branch wins over template-specific
@@ -635,16 +664,14 @@ export function getNextStepsLines(
       "Next steps:",
       "1. Your custom issue tracker isn't wired up yet — runs hard-fail until you configure it.",
       `2. Feed the setup prompt to ${agent.label} on your host to finish wiring it up:`,
+      ...piAuthLines,
       `   ${agent.setupCommand}`,
       `   (Runs on the host — you need the ${agent.label} CLI installed locally, since the sandbox image isn't built yet.)`,
       `3. Follow .ralph/${SETUP_ISSUE_TRACKER_DOC} to edit the scaffolded files in place, build the image, and verify.`,
     ];
   }
   if (template === "blank") {
-    const lines = [
-      "Next steps:",
-      `1. Set the required env vars in .ralph/.env (see .ralph/.env.example)`,
-    ];
+    const lines = ["Next steps:", `1. ${authStep}`, ...piAuthLines];
     if (agent.name === "claude-code") {
       lines.push(
         "   To use your Claude subscription instead of an API key, run `claude setup-token` on your host and paste the result into CLAUDE_CODE_OAUTH_TOKEN.",
@@ -663,7 +690,8 @@ export function getNextStepsLines(
     let step = 1;
     const lines: string[] = [
       "Next steps:",
-      `${step++}. Set the required env vars in .ralph/.env (see .ralph/.env.example)`,
+      `${step++}. ${authStep}`,
+      ...piAuthLines,
     ];
     if (agent.name === "claude-code") {
       lines.push(
@@ -757,14 +785,14 @@ const copyTemplateFiles = (
 /**
  * Replace the agent factory and sandbox provider in a scaffolded main.ts.
  *
- * Templates use `claudeCode` as the default agent factory and `docker` as the
- * default sandbox provider. When a different agent, model, or sandbox provider
- * is selected, this function rewrites the imports and factory calls.
+ * Templates use `pi` and `docker`. Pi without a model keeps the templates'
+ * planner/worker split (ADR 0021). An explicit model or another agent rewrites
+ * every role to one model. Filename and sandbox rewrites always apply.
  */
 const rewriteMainTs = (
   configDir: string,
   agent: AgentEntry,
-  model: string,
+  model: string | undefined,
   sandboxProvider: SandboxProviderEntry,
   mainFilename: string,
 ): Effect.Effect<void, Error, FileSystem.FileSystem> =>
@@ -787,19 +815,20 @@ const rewriteMainTs = (
       content = content.replace(/main\.mts/g, "main.ts");
     }
 
-    // Replace factory function name in imports (e.g. claudeCode → pi)
-    // and all factory calls with the correct model.
-    // Templates always use claudeCode as the placeholder factory.
-    content = content.replace(/\bclaudeCode\b/g, agent.factoryImport);
-    // Replace model strings in factory calls: factoryImport("any-model")
-    const factoryCallRe = new RegExp(
-      `${agent.factoryImport}\\(["']([^"']+)["']\\)`,
-      "g",
-    );
-    content = content.replace(
-      factoryCallRe,
-      `${agent.factoryImport}("${model}")`,
-    );
+    if (agent.name !== "pi" || model !== undefined) {
+      const effectiveModel = model ?? agent.defaultModel;
+      // Anchor the short `pi` name to import/call syntax, not arbitrary prose.
+      content = content.replace(
+        /(\bimport\s*\{[^}]*?)\bpi\b([^}]*\}\s*from\s*["']@mauricioliu\/ralph["'])/g,
+        (_match, prefix: string, suffix: string) =>
+          `${prefix}${agent.factoryImport}${suffix}`,
+      );
+      // Handles both pi(...) and ralph.pi(...), retaining trailing options.
+      content = content.replace(
+        /\bpi\s*\(\s*(["'])([^"']+)\1/g,
+        () => `${agent.factoryImport}(${JSON.stringify(effectiveModel)}`,
+      );
+    }
 
     // Replace the sandbox provider. Templates always use `docker` as the
     // placeholder, where the registry name doubles as both the factory function
@@ -978,7 +1007,8 @@ Run your **list** command inside the built image and confirm it returns the open
 
 export interface ScaffoldOptions {
   agent: AgentEntry;
-  model: string;
+  /** Omit for Pi's template model split; other agents use their default model. */
+  model?: string;
   templateName?: string;
   createLabel?: boolean;
   issueTracker?: IssueTrackerEntry;

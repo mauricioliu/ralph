@@ -91,13 +91,13 @@ const templateOption = Options.text("template").pipe(
 );
 
 const agentOption = Options.text("agent").pipe(
-  Options.withDescription("Agent to use (e.g. claude-code)"),
+  Options.withDescription("Agent to use (e.g. pi, claude-code, codex)"),
   Options.optional,
 );
 
 const initModelOption = Options.text("model").pipe(
   Options.withDescription(
-    "Model to use for the agent (e.g. claude-sonnet-4-6). Defaults to the agent's default model",
+    "Model for all roles. Without --model, Pi keeps the template's planner/worker model split; other agents use their default model",
   ),
   Options.optional,
 );
@@ -287,11 +287,13 @@ const initCommand = Command.make(
         const selected = yield* Effect.promise(() =>
           clack.select({
             message: "Select an agent:",
-            initialValue: "claude-code",
+            initialValue: "pi",
             options: agents.map((a) => ({
               value: a.name,
               label: a.label,
-              hint: `Default model: ${a.defaultModel}`,
+              hint: a.defaultModels
+                ? `Planner ${a.defaultModels.planner} · workers ${a.defaultModels.worker}`
+                : `Default model: ${a.defaultModel}`,
             })),
           }),
         );
@@ -303,11 +305,9 @@ const initCommand = Command.make(
         selectedAgent = getAgent(selected as string)!;
       }
 
-      // Resolve model: CLI flag > agent default
+      // Preserve absence so Pi keeps the template's role-specific models.
       const selectedModel =
-        modelFlag._tag === "Some"
-          ? modelFlag.value
-          : selectedAgent.defaultModel;
+        modelFlag._tag === "Some" ? modelFlag.value : undefined;
 
       // Resolve sandbox provider: CLI flag > interactive select (no default — user must choose)
       const sandboxProviders = listSandboxProviders();

@@ -29,11 +29,15 @@ describe("Agent registry", () => {
     const agent = getAgent("pi");
     expect(agent).toBeDefined();
     expect(agent!.name).toBe("pi");
-    expect(agent!.defaultModel).toBe("claude-sonnet-4-6");
+    expect(agent!.defaultModel).toBe("zai-coding-cn/glm-5.3:high");
+    expect(agent!.defaultModels).toEqual({
+      planner: "openai-codex/gpt-6-astra:high",
+      worker: "zai-coding-cn/glm-5.3:high",
+    });
     expect(agent!.factoryImport).toBe("pi");
     expect(agent!.dockerfileTemplate).toContain("FROM");
     expect(agent!.dockerfileTemplate).toContain(
-      "@mariozechner/pi-coding-agent",
+      "@earendil-works/pi-coding-agent",
     );
   });
 

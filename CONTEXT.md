@@ -76,6 +76,18 @@ _Avoid_: "base branch", "destination branch", "merge target"
 A pluggable implementation that builds commands and parses output for a specific **agent**, injected into `run()` via the `agent` option.
 _Avoid_: "agent adapter", "agent driver"
 
+**Agent role**:
+The named function an **agent** performs within a scaffolded workflow -- planner, implementer, reviewer, merger, or an individual agent. Orthogonal to the **agent provider**; the same provider may serve different roles.
+_Avoid_: "job", "phase" (the workflow step), "task" (the work item)
+
+**Worker**:
+Any non-planning **agent role**, including implementer, reviewer, merger, and the individual agent in a single-agent workflow.
+_Avoid_: using "worker" to mean only the implementer
+
+**Credential transfer**:
+The one-way **host**-to-**sandbox** copy of the **agent**'s authentication material before launch. The **host** copy stays authoritative; the **no-sandbox provider** already uses it directly.
+_Avoid_: "credential sync" (implies two-way updates), "session transfer" (moves conversation records, not credentials)
+
 ### Execution
 
 **Agent invoker**:
