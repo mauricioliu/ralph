@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { constants } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { FileSystem } from "@effect/platform";
 import { Effect } from "effect";
 import { ExecHostError } from "./errors.js";
@@ -50,7 +51,7 @@ export const runMain = (cwd: string) =>
       );
     }
     const runtime = yield* Effect.try({
-      try: () => require.resolve("tsx/cli"),
+      try: () => pathToFileURL(require.resolve("tsx")).href,
       catch: () =>
         failure(
           "The included TypeScript runtime is unavailable. Reinstall Ralph.",
@@ -59,15 +60,21 @@ export const runMain = (cwd: string) =>
     // The CLI runtime may request interruption on SIGINT/SIGTERM. Forward the
     // signal once, then let the child finish cleanup before restoring its status.
     yield* Effect.async<void, ExecHostError>((resume) => {
-      const child = spawn(process.execPath, [runtime, entries[0]!], {
-        cwd,
-        env: process.env,
-        stdio: "inherit",
-        // Isolate POSIX group signals: terminal Ctrl-C reaches Ralph, which
-        // forwards once through tsx rather than also broadcasting to the entry.
-        // Inherited descriptors still provide the original terminal streams.
-        detached: process.platform !== "win32",
-      });
+      // Register TypeScript in the entry's own process. The tsx CLI adds a
+      // wrapper that can mask signal termination as exit 0 on Node 22.
+      const child = spawn(
+        process.execPath,
+        ["--import", runtime, entries[0]!],
+        {
+          cwd,
+          env: process.env,
+          stdio: "inherit",
+          // Isolate POSIX group signals: terminal Ctrl-C reaches Ralph, which
+          // forwards once rather than also broadcasting to the entry.
+          // Inherited descriptors still provide the original terminal streams.
+          detached: process.platform !== "win32",
+        },
+      );
       const interrupt = () => {
         child.kill("SIGINT");
       };
