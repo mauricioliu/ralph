@@ -6,7 +6,7 @@ import { noSandbox } from "@mauricioliu/ralph/sandboxes/no-sandbox";
 import {
   asRecord,
   asString,
-  claudeAgent,
+  piAgent,
   fail,
   required,
   sh,
@@ -66,7 +66,7 @@ try {
 
   const result = await runWithExtraction({
     name: `update-branch-pr-${PR_NUMBER}`,
-    agent: claudeAgent(),
+    agent: piAgent(),
     sandbox: noSandbox(),
     logging: { type: "stdout" },
     promptFile: path.join(import.meta.dirname, "prompt.md"),

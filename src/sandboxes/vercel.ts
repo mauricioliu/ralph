@@ -2,8 +2,8 @@
  * Vercel isolated sandbox provider — wraps `@vercel/sandbox` into a SandboxProvider.
  *
  * Usage:
- *   import { vercel } from "ralph/sandboxes/vercel";
- *   await run({ agent: claudeCode("claude-opus-4-7"), sandbox: vercel() });
+ *   import { vercel } from "@mauricioliu/ralph/sandboxes/vercel";
+ *   await run({ agent: claudeCode("claude-opus-4-8"), sandbox: vercel() });
  */
 
 import { execSync } from "node:child_process";

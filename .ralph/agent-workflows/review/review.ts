@@ -3,7 +3,7 @@ import * as path from "node:path";
 import * as ralph from "@mauricioliu/ralph";
 import { noSandbox } from "@mauricioliu/ralph/sandboxes/no-sandbox";
 import {
-  claudeAgent,
+  piAgent,
   fail,
   required,
   sh,
@@ -26,7 +26,7 @@ try {
 
   const result = await runWithExtraction({
     name: `review-pr-${PR_NUMBER}`,
-    agent: claudeAgent(),
+    agent: piAgent(),
     sandbox: noSandbox(),
     logging: { type: "stdout" },
     promptFile: path.join(import.meta.dirname, "prompt.md"),

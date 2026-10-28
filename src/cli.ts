@@ -35,6 +35,7 @@ import type {
 } from "./InitService.js";
 import { ConfigDirError, InitError } from "./errors.js";
 import { VERSION } from "./version.js";
+import { runMain } from "./runMain.js";
 
 // --- Shared options ---
 
@@ -97,7 +98,7 @@ const agentOption = Options.text("agent").pipe(
 
 const initModelOption = Options.text("model").pipe(
   Options.withDescription(
-    "Model to use for the agent (e.g. zai-coding-cn/glm-5.3:high). Defaults to the agent's default model; for pi without a model, the template's planner/worker model split is kept as-is",
+    "Model for all roles. Without --model, Pi keeps the template's planner/worker model split; other agents use their default model",
   ),
   Options.optional,
 );
@@ -287,13 +288,10 @@ const initCommand = Command.make(
         const selected = yield* Effect.promise(() =>
           clack.select({
             message: "Select an agent:",
-            // Pi is the fork's default harness (ADR 0021) — preselect it.
             initialValue: "pi",
             options: agents.map((a) => ({
               value: a.name,
               label: a.label,
-              // Agents with a two-model split (pi) hint the planner/worker
-              // pair; single-model agents hint their default model.
               hint: a.defaultModels
                 ? `Planner ${a.defaultModels.planner} · workers ${a.defaultModels.worker}`
                 : `Default model: ${a.defaultModel}`,
@@ -308,9 +306,7 @@ const initCommand = Command.make(
         selectedAgent = getAgent(selected as string)!;
       }
 
-      // Resolve model: explicit --model wins. No flag → undefined, which the
-      // scaffold's rewrite-skip guard reads as "keep the template's model
-      // split" for pi (and "agent default" for everything else).
+      // Preserve absence so Pi keeps the template's role-specific models.
       const selectedModel =
         modelFlag._tag === "Some" ? modelFlag.value : undefined;
 
@@ -684,6 +680,12 @@ const podmanCommand = Command.make("podman", {}, () =>
   Command.withSubcommands([podmanBuildImageCommand, podmanRemoveImageCommand]),
 );
 
+const runCommand = Command.make("run", {}, () => runMain(process.cwd())).pipe(
+  Command.withDescription(
+    "Run .ralph/main.ts or .ralph/main.mts in the current project",
+  ),
+);
+
 // --- Root command ---
 
 const rootCommand = Command.make("ralph", {}, () =>
@@ -695,7 +697,12 @@ const rootCommand = Command.make("ralph", {}, () =>
 );
 
 export const ralph = rootCommand.pipe(
-  Command.withSubcommands([initCommand, dockerCommand, podmanCommand]),
+  Command.withSubcommands([
+    initCommand,
+    runCommand,
+    dockerCommand,
+    podmanCommand,
+  ]),
 );
 
 export const cli = Command.run(ralph, {

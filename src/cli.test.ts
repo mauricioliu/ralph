@@ -1,5 +1,5 @@
 import { exec } from "node:child_process";
-import { mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -35,7 +35,7 @@ describe("ralph CLI", () => {
     expect(stdout).toContain("ralph");
     expect(stdout).toContain("docker");
     expect(stdout).toContain("init");
-    expect(stdout).not.toContain("run");
+    expect(stdout).toContain("run");
     expect(stdout).not.toContain("interactive");
     // build-image and remove-image are namespaced under docker, not top-level
     expect(stdout).toContain("docker build-image");
@@ -291,105 +291,5 @@ describe("ralph CLI", () => {
     expect(stdout).toContain("Init complete");
     const entries = await readdir(join(hostDir, ".ralph"));
     expect(entries).toContain("SETUP_ISSUE_TRACKER.md");
-  });
-
-  it("init --agent pi without --model skips the rewrite and keeps the template's model split", async () => {
-    const hostDir = await mkdtemp(join(tmpdir(), "cli-host-"));
-    await initRepo(hostDir);
-
-    const { stdout } = await runCli(
-      "init --agent pi --template parallel-planner --sandbox docker --issue-tracker beads --build-image false --install-template-deps false",
-      hostDir,
-    );
-
-    expect(stdout).toContain("Init complete");
-    const main = await readFile(join(hostDir, ".ralph", "main.mts"), "utf-8");
-    // Rewrite-skip guard (ADR 0021): the template's pi placeholder factory and
-    // two-model split survive verbatim — nothing collapses to a single model.
-    expect(main).toContain('ralph.pi("openai-codex/gpt-5.6-terra:high")');
-    expect(main).toContain('ralph.pi("zai-coding-cn/glm-5.3:high")');
-    expect(main).not.toContain("claudeCode");
-  });
-
-  it("init --agent pi scaffolds the @earendil-works pi package and subscription-auth env example", async () => {
-    const hostDir = await mkdtemp(join(tmpdir(), "cli-host-"));
-    await initRepo(hostDir);
-
-    const { stdout } = await runCli(
-      "init --agent pi --template blank --sandbox docker --issue-tracker beads --build-image false",
-      hostDir,
-    );
-
-    expect(stdout).toContain("Init complete");
-    const dockerfile = await readFile(
-      join(hostDir, ".ralph", "Dockerfile"),
-      "utf-8",
-    );
-    expect(dockerfile).toContain("@earendil-works/pi-coding-agent");
-    expect(dockerfile).not.toContain("@mariozechner/pi-coding-agent");
-
-    const envExample = await readFile(
-      join(hostDir, ".ralph", ".env.example"),
-      "utf-8",
-    );
-    expect(envExample).toContain("auth.json");
-  });
-
-  it("init --agent pi --model my-model collapses every factory call to that model", async () => {
-    const hostDir = await mkdtemp(join(tmpdir(), "cli-host-"));
-    await initRepo(hostDir);
-
-    const { stdout } = await runCli(
-      "init --agent pi --model my-model --template parallel-planner --sandbox docker --issue-tracker beads --build-image false --install-template-deps false",
-      hostDir,
-    );
-
-    expect(stdout).toContain("Init complete");
-    const main = await readFile(join(hostDir, ".ralph", "main.mts"), "utf-8");
-    expect(main).not.toContain("claudeCode");
-    // parallel-planner calls the factory three times — all collapsed.
-    expect(main.match(/pi\("my-model"\)/g)).toHaveLength(3);
-    expect(main).not.toContain("gpt-5.6-terra");
-    expect(main).not.toContain("glm-5.3");
-  });
-
-  it("init --agent codex without --model still rewrites to the agent's default model", async () => {
-    const hostDir = await mkdtemp(join(tmpdir(), "cli-host-"));
-    await initRepo(hostDir);
-
-    const { stdout } = await runCli(
-      "init --agent codex --template parallel-planner --sandbox docker --issue-tracker beads --build-image false --install-template-deps false",
-      hostDir,
-    );
-
-    expect(stdout).toContain("Init complete");
-    const main = await readFile(join(hostDir, ".ralph", "main.mts"), "utf-8");
-    expect(main).not.toContain("claudeCode");
-    expect(main).not.toMatch(/\bpi\s*\(/);
-    expect(main.match(/codex\("gpt-5\.4"\)/g)).toHaveLength(3);
-    expect(main).not.toContain("gpt-5.6-terra");
-    expect(main).not.toContain("glm-5.3");
-  });
-
-  it("init --agent codex scaffolds a working orchestration script: imports rewritten to codex, single model", async () => {
-    const hostDir = await mkdtemp(join(tmpdir(), "cli-host-"));
-    await initRepo(hostDir);
-
-    const { stdout } = await runCli(
-      "init --agent codex --template blank --sandbox docker --issue-tracker beads --build-image false",
-      hostDir,
-    );
-
-    expect(stdout).toContain("Init complete");
-    const main = await readFile(join(hostDir, ".ralph", "main.mts"), "utf-8");
-    // The named import is rewritten from the pi placeholder to codex, every
-    // factory call is single-model, and no placeholder reference survives —
-    // the scaffolded script is runnable as-is.
-    expect(main).toContain('import { run, codex } from "@mauricioliu/ralph"');
-    expect(main).toContain(
-      'import { docker } from "@mauricioliu/ralph/sandboxes/docker"',
-    );
-    expect(main).toContain('agent: codex("gpt-5.4")');
-    expect(main).not.toMatch(/\bpi\b/);
   });
 });

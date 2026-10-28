@@ -2,61 +2,57 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as ralph from "@mauricioliu/ralph";
 import { noSandbox } from "@mauricioliu/ralph/sandboxes/no-sandbox";
-import {
-  asRecord,
-  asString,
-  claudeAgent,
-  fail,
-  required,
-  safeSh,
-  standardSchema,
-  writeText,
-} from "../shared/common";
+import { piAgent, fail, required, writeJson } from "../shared/common";
 import { runWithExtraction } from "../shared/run-with-extraction";
+import { parseBatch, planSchema, renderIssues } from "./batch";
 
-interface ExploreOutput {
-  readonly comment: string;
-}
+/**
+ * Batch explore: ONE orchestrating agent reads every open `agent:explore`
+ * issue, groups them by likely shared root cause, explores the groups
+ * sequentially, confirms membership, and produces one validated
+ * plan. Read-only — writes `plan.json` to OUTPUT_DIR; `apply.ts` (in a
+ * separate job) is the only thing that touches GitHub.
+ */
 
-const exploreOutputSchema = standardSchema<ExploreOutput>((value) => {
-  const record = asRecord(value, "explore output");
-  return {
-    comment: asString(record.comment, "comment"),
-  };
-});
+const ISSUES_FILE = required("ISSUES_FILE");
 
-const ISSUE_NUMBER = required("ISSUE_NUMBER");
-const ISSUE_TITLE = required("ISSUE_TITLE");
+/** One repair attempt on invalid structured output. */
+const MAX_RETRIES = 1;
+
+const promptPath = (file: string) => path.join(import.meta.dirname, file);
 
 try {
-  const issueContext =
-    safeSh(`gh issue view ${ISSUE_NUMBER} --comments`) ||
-    `Issue #${ISSUE_NUMBER}: ${ISSUE_TITLE}`;
+  const batch = parseBatch(JSON.parse(fs.readFileSync(ISSUES_FILE, "utf8")));
+  if (batch.length === 0) {
+    fail("No open agent:explore issues in the batch file.");
+  }
 
-  const result = await runWithExtraction({
-    name: `explore-#${ISSUE_NUMBER}`,
-    agent: claudeAgent(),
+  console.log(
+    `Batch: ${batch.length} issue(s): ${batch.map((i) => `#${i.number}`).join(", ")}`,
+  );
+
+  // The schema enforces the whole-batch rules, so an invalid plan earns one
+  // repair attempt.
+  const plan = await runWithExtraction({
+    name: "explore-batch",
+    agent: piAgent("planner"),
     sandbox: noSandbox(),
     logging: { type: "stdout" },
-    promptFile: path.join(import.meta.dirname, "prompt.md"),
+    promptFile: promptPath("prompt.md"),
     promptArgs: {
-      ISSUE_NUMBER,
-      ISSUE_TITLE,
-      ISSUE_CONTEXT: issueContext,
+      ISSUE_COUNT: String(batch.length),
+      ISSUES: renderIssues(batch),
     },
     output: ralph.Output.object({
       tag: "output",
-      schema: exploreOutputSchema,
+      schema: planSchema(batch),
     }),
-    extractionPrompt: fs.readFileSync(
-      path.join(import.meta.dirname, "extraction.md"),
-      "utf8",
-    ),
+    extractionPrompt: fs.readFileSync(promptPath("extraction.md"), "utf8"),
+    maxRetries: MAX_RETRIES,
   });
 
-  writeText("comment.md", result.output.comment);
-
-  console.log(`Exploration comment written for issue #${ISSUE_NUMBER}.`);
+  writeJson("plan.json", plan.output);
+  console.log(`Plan written for ${plan.output.issues.length} issue(s).`);
 } catch (error) {
   fail(error instanceof Error ? error.message : String(error));
 }

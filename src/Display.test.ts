@@ -155,6 +155,26 @@ describe("SilentDisplay", () => {
     });
   });
 
+  describe("textChunk", () => {
+    it("captures streaming chunks as textChunk entries", async () => {
+      const { ref, layer } = setup();
+
+      const entries = await Effect.runPromise(
+        Effect.gen(function* () {
+          const d = yield* Display;
+          yield* d.textChunk("Now I have");
+          yield* d.textChunk(" a clear picture.");
+          return yield* readEntries(ref);
+        }).pipe(Effect.provide(layer)),
+      );
+
+      expect(entries).toEqual([
+        { _tag: "textChunk", message: "Now I have" },
+        { _tag: "textChunk", message: " a clear picture." },
+      ]);
+    });
+  });
+
   describe("mixed calls", () => {
     it("captures all entry types in order", async () => {
       const { ref, layer } = setup();
@@ -326,6 +346,68 @@ describe("FileDisplay", () => {
 
     const log = readLog(logPath);
     expect(log).toContain("Some agent output here");
+  });
+
+  it("text() writes each message on its own line", async () => {
+    const { logPath, layer } = setup();
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const d = yield* Display;
+        yield* d.text("Context window: 10%");
+        yield* d.text("Context window: 20%");
+      }).pipe(Effect.provide(layer)),
+    );
+
+    const log = readLog(logPath);
+    expect(log).toContain("Context window: 10%\nContext window: 20%\n");
+  });
+
+  it("textChunk() writes raw chunks with no appended newline", async () => {
+    const { logPath, layer } = setup();
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const d = yield* Display;
+        yield* d.textChunk("Now I have");
+        yield* d.textChunk(" a clear picture.");
+      }).pipe(Effect.provide(layer)),
+    );
+
+    const log = readLog(logPath);
+    expect(log).toContain("Now I have a clear picture.");
+    expect(log).not.toContain("Now I have\n");
+  });
+
+  it("starts a following line entry on a fresh line after a mid-line chunk", async () => {
+    const { logPath, layer } = setup();
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const d = yield* Display;
+        yield* d.textChunk("Let me read the file.");
+        yield* d.toolCall("Read", "src/hello.ts");
+      }).pipe(Effect.provide(layer)),
+    );
+
+    const log = readLog(logPath);
+    expect(log).toContain("Let me read the file.\nRead(src/hello.ts)\n");
+  });
+
+  it("does not insert an extra newline when the chunk already ends with one", async () => {
+    const { logPath, layer } = setup();
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const d = yield* Display;
+        yield* d.textChunk("Done.\n");
+        yield* d.text("Context window: 10%");
+      }).pipe(Effect.provide(layer)),
+    );
+
+    const log = readLog(logPath);
+    expect(log).toContain("Done.\nContext window: 10%\n");
+    expect(log).not.toContain("Done.\n\nContext window");
   });
 
   it("creates log file with run delimiter on initialization", async () => {

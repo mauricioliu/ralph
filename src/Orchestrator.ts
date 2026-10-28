@@ -5,7 +5,6 @@ import { preprocessPrompt } from "./PromptPreprocessor.js";
 import {
   AgentError,
   AgentIdleTimeoutError,
-  CredentialProvisionError,
   SessionCaptureError,
 } from "./errors.js";
 import type { SandboxError } from "./errors.js";
@@ -14,6 +13,7 @@ import { SandboxFactory, SANDBOX_REPO_DIR } from "./SandboxFactory.js";
 import { withSandboxLifecycle, type SandboxHooks } from "./SandboxLifecycle.js";
 import type { AgentProvider, IterationUsage } from "./AgentProvider.js";
 import type { Timeouts } from "./run.js";
+import { provisionAgentCredentialsEffect } from "./CredentialProvision.js";
 import { TextDeltaBuffer } from "./TextDeltaBuffer.js";
 
 export type { ParsedStreamEvent, IterationUsage } from "./AgentProvider.js";
@@ -30,6 +30,7 @@ const invokeAgent = (
   completionSignals: readonly string[],
   onText: (text: string) => void,
   onToolCall: (name: string, formattedArgs: string) => void,
+  onRawLine: (line: string) => void,
   onIdleWarning: (minutes: number) => void,
   onCompletionTimeout: (timeoutMs: number) => void,
   idleWarningIntervalMs: number = IDLE_WARNING_INTERVAL_MS,
@@ -43,6 +44,7 @@ const invokeAgent = (
   Effect.gen(function* () {
     let resultText: string | undefined;
     let streamError: string | undefined;
+    let canRecoverStreamError = false;
     let sessionId: string | undefined;
     let usage: IterationUsage | undefined;
     // Accumulated text/result output, scanned for the completion signal so a
@@ -99,7 +101,9 @@ const invokeAgent = (
             yield* Effect.sleep(Duration.millis(completionTimeoutMs));
             onCompletionTimeout(completionTimeoutMs);
             yield* Deferred.succeed(completionTimeoutDeferred, {
-              result: resultText ?? accumulatedOutput,
+              result: provider.parsedOutputOnly
+                ? (resultText ?? accumulatedOutput)
+                : resultText || accumulatedOutput,
               sessionId,
               usage,
             });
@@ -154,21 +158,42 @@ const invokeAgent = (
       });
       const execResult = yield* sandbox.exec(printCmd.command, {
         onLine: (line) => {
+          // Surface the raw line FIRST so verbose mode/forwarders see every
+          // stdout line the agent produced, including ones parseStreamLine
+          // drops. Errors thrown by the callback are caught by the emitter
+          // layer; isolate the parser path here so a broken forwarder cannot
+          // skip parsing.
+          try {
+            onRawLine(line);
+          } catch {
+            // Swallow — must not skip parsing/timer logic below.
+          }
           for (const parsed of provider.parseStreamLine(line)) {
             if (parsed.type === "text") {
               onText(parsed.text);
               accumulatedOutput += parsed.text;
             } else if (parsed.type === "result") {
+              // agent_end can repeat a previous message_end snapshot. After an
+              // error, only a restarted attempt may supply a recovery result.
+              if (streamError !== undefined && !canRecoverStreamError) continue;
               resultText = parsed.result;
-              accumulatedOutput = parsed.result;
+              accumulatedOutput = provider.parsedOutputOnly
+                ? parsed.result
+                : accumulatedOutput + parsed.result;
               streamError = undefined;
+              canRecoverStreamError = false;
             } else if (
               parsed.type === "error" ||
               parsed.type === "output_reset"
             ) {
               resultText = undefined;
               accumulatedOutput = "";
-              if (parsed.type === "error") streamError = parsed.message;
+              if (parsed.type === "error") {
+                streamError = parsed.message;
+                canRecoverStreamError = false;
+              } else {
+                canRecoverStreamError = true;
+              }
             } else if (parsed.type === "tool_call") {
               onToolCall(parsed.name, parsed.args);
             } else if (parsed.type === "session_id") {
@@ -177,8 +202,8 @@ const invokeAgent = (
               usage = parsed.usage;
             }
           }
-          // Recompute rather than latch: a failed/follow-up turn revokes an
-          // earlier signal. Never use raw stdout (it includes user/tool text).
+          // Recompute rather than latch: errors and restarted assistant output
+          // revoke an earlier signal, including its hanging-process grace timer.
           completionDetected =
             streamError === undefined &&
             completionSignals.some((sig) => accumulatedOutput.includes(sig));
@@ -190,8 +215,11 @@ const invokeAgent = (
         },
         cwd: sandboxRepoDir,
         stdin: printCmd.stdin,
+        env: provider.launchEnv,
       });
 
+      // Permit Pi's internal retries to recover, but never accept an unresolved
+      // stream error just because the CLI process exits with code zero.
       if (streamError !== undefined) {
         return yield* Effect.fail(
           new AgentError({
@@ -218,7 +246,12 @@ const invokeAgent = (
         );
       }
 
-      return { result: resultText ?? accumulatedOutput, sessionId, usage };
+      // Pi raw stdout also contains user prompts and tool output. Other
+      // providers retain upstream's raw-stdout fallback for compatibility.
+      const result = provider.parsedOutputOnly
+        ? (resultText ?? accumulatedOutput)
+        : resultText || execResult.stdout;
+      return { result, sessionId, usage };
     }).pipe(
       Effect.ensuring(
         Effect.sync(() => {
@@ -297,6 +330,8 @@ export interface OrchestrateOptions {
   readonly skipPromptExpansion?: boolean;
   /** Override default timeouts for built-in lifecycle steps. Unset keys keep their defaults. */
   readonly timeouts?: Timeouts;
+  /** Forwarded to `withSandboxLifecycle` — see `SandboxLifecycleOptions.keepSourceBranch`. */
+  readonly keepSourceBranch?: boolean;
 }
 
 /** Per-iteration result carrying an optional session ID. */
@@ -368,7 +403,14 @@ export const orchestrate = (
 
       const sandboxResult = yield* factory.withSandbox(
         (
-          { hostWorktreePath, sandboxRepoPath, applyToHost, bindMountHandle },
+          {
+            hostWorktreePath,
+            sandboxRepoPath,
+            applyToHost,
+            bindMountHandle,
+            sandboxTag,
+            credentialHandle,
+          },
           sandbox,
         ) =>
           withSandboxLifecycle(
@@ -381,33 +423,17 @@ export const orchestrate = (
               applyToHost,
               signal: options.signal,
               timeouts: options.timeouts,
+              keepSourceBranch: options.keepSourceBranch,
             },
             sandbox,
             (ctx) =>
               Effect.gen(function* () {
-                // Provision agent credentials (host → sandbox) before anything
-                // else runs. Pi authenticates via OAuth files rather than env
-                // vars, so the host's auth file must be inside the sandbox
-                // before the agent starts. One-way copy — the host copy stays
-                // authoritative (ADR 0021).
-                if (provider.provisionCredentials && bindMountHandle) {
-                  yield* display.status(
-                    label("Provisioning agent credentials"),
-                    "info",
-                  );
-                  yield* Effect.tryPromise({
-                    try: () =>
-                      provider.provisionCredentials!({
-                        handle: bindMountHandle,
-                      }),
-                    catch: (e) =>
-                      e instanceof CredentialProvisionError
-                        ? e
-                        : new CredentialProvisionError({
-                            message: `Credential provisioning failed: ${e instanceof Error ? e.message : String(e)}`,
-                          }),
-                  });
-                }
+                yield* provisionAgentCredentialsEffect({
+                  provider,
+                  sandboxTag,
+                  credentialHandle,
+                  signal: options.signal,
+                });
 
                 // Resume session: transfer JSONL from host to sandbox before iteration 1
                 const iterationResumeSession =
@@ -451,7 +477,7 @@ export const orchestrate = (
                 // Invoke the agent — buffer text deltas so Pi's single-token
                 // chunks are displayed as readable multi-word lines.
                 const textBuffer = new TextDeltaBuffer((chunk) => {
-                  Effect.runPromise(display.text(chunk));
+                  Effect.runPromise(display.textChunk(chunk));
                   Effect.runPromise(
                     streamEmitter.emit({
                       type: "text",
@@ -472,6 +498,16 @@ export const orchestrate = (
                       type: "toolCall",
                       name,
                       formattedArgs,
+                      iteration: i,
+                      timestamp: new Date(),
+                    }),
+                  );
+                };
+                const onRawLine = (line: string) => {
+                  Effect.runPromise(
+                    streamEmitter.emit({
+                      type: "raw",
+                      line,
                       iteration: i,
                       timestamp: new Date(),
                     }),
@@ -508,6 +544,7 @@ export const orchestrate = (
                   completionSignals,
                   onText,
                   onToolCall,
+                  onRawLine,
                   onIdleWarning,
                   onCompletionTimeout,
                   options._idleWarningIntervalMs,

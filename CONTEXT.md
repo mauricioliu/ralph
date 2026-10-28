@@ -43,7 +43,7 @@ _Avoid_: "local provider", "none provider", "host provider"
 ### Branching
 
 **Branch strategy**:
-Configuration on a **sandbox provider** that controls how the agent's changes relate to branches, set at provider construction time.
+Configuration on a run or **worktree** that controls how the **agent**'s changes relate to branches. Independent of **session fork**.
 _Avoid_: "worktree mode" (old name), "branch mode"
 
 **Head (branch strategy)**:
@@ -77,30 +77,16 @@ A pluggable implementation that builds commands and parses output for a specific
 _Avoid_: "agent adapter", "agent driver"
 
 **Agent role**:
-The named function an **agent** performs within a scaffolded workflow -- planner, implementer, reviewer, or merger. Orthogonal to the **agent provider**; the same provider may serve different roles. Collectively, every role except planner is a **worker**.
-_Avoid_: "job", "phase" (that's the workflow step), "task" (that's the work item)
+The named function an **agent** performs within a scaffolded workflow -- planner, implementer, reviewer, merger, or an individual agent. Orthogonal to the **agent provider**; the same provider may serve different roles.
+_Avoid_: "job", "phase" (the workflow step), "task" (the work item)
 
-### Workflow
+**Worker**:
+Any non-planning **agent role**, including implementer, reviewer, merger, and the individual agent in a single-agent workflow.
+_Avoid_: using "worker" to mean only the implementer
 
-**Coordinator**:
-The host-side process that executes a scaffolded workflow's `main.mts`, sequencing the **agent roles** and owning the workflow state file in the **config directory**. Only one coordinator may run against an installation at a time.
-_Avoid_: "orchestrator" (that's Ralph's own role), "workflow runner", "main process"
-
-**Coordinator lock**:
-The `.ralph/workflow-lock.json` file a **coordinator** creates exclusively at launch and removes when it exits. A second coordinator finding a lock owned by a live PID refuses to start; a lock owned by a dead PID is stale and is taken over by the next launch. Heartbeats timestamp the lock for diagnostics but never evict a live owner.
-_Avoid_: "mutex", "singleton file", "workflow guard"
-
-**Phase receipt**:
-The durable per-issue record a **coordinator** writes atomically to the workflow state file: canonical branch, workflow **phase**, approved SHA and reviewed base. Failures never rewrite a receipt, so a stop preserves the resume **phase**; receipts are claims that must be re-verified against git before use.
-_Avoid_: "checkpoint", "status entry", "ticket state"
-
-**Phase**:
-The durable workflow step recorded in a **phase receipt** for one issue: `implementing`, `review-pending`, `merge-pending` or `merged`; absence of a receipt is the pending state. Orthogonal to **agent role** (which runs) and to **iteration** (which advances an agent).
-_Avoid_: "stage", "step" (that's a workflow instruction), "status" (too generic)
-
-**Reconciliation report**:
-The read-only per-issue printout a scaffolded workflow derives from **phase receipts** plus live git ancestry: current **phase**, branch, SHA and the next step to advance. Produced on demand (`RALPH_RECONCILE=1`) and at the already-integrated stop; takes no **coordinator lock** and performs no tracker mutations.
-_Avoid_: "status page", "audit log", "dashboard"
+**Credential transfer**:
+The one-way **host**-to-**sandbox** copy of the **agent**'s authentication material before launch. The **host** copy stays authoritative; the **no-sandbox provider** already uses it directly.
+_Avoid_: "credential sync" (implies two-way updates), "session transfer" (moves conversation records, not credentials)
 
 ### Execution
 
@@ -221,7 +207,7 @@ Continuing an **agent session** by appending new turns to the same session recor
 _Avoid_: "continue", "follow-up"
 
 **Session fork**:
-Branching an **agent session** into a new record with a new session ID, leaving the parent record byte-for-byte unchanged. Uses the **agent**'s native fork flag (`claude --fork-session`, `codex exec fork`). Exposed as `RunResult.fork()`. Isolates the session only -- not the **source branch** or **sandbox**.
+Branching an **agent session** into a new record with a new session ID, leaving the parent record byte-for-byte unchanged. Uses the **agent**'s native fork flag (`claude --fork-session`, `codex exec fork`). Exposed as `RunResult.fork()`. Isolates the session only -- not the **source branch** or **sandbox**. Supported for Claude Code and Codex; Pi supports **session resume**, not **session fork**.
 _Avoid_: "branch" (overloaded with git branches), "copy session"
 
 ### Display
@@ -239,5 +225,5 @@ The display mode where Ralph renders an interactive UI in the terminal with spin
 _Avoid_: "stdout mode", "interactive mode", "CLI mode" (ambiguous with the CLI itself)
 
 **Agent stream event**:
-A single item in the **agent**'s output stream -- either a `text` chunk or a `toolCall` -- surfaced to the caller of `run()` so the stream can be forwarded to an external observability system. Available only in **log-to-file mode** via the `onAgentStreamEvent` callback on the `logging` option. Each event carries its `iteration` number and a `timestamp`.
+A single item in the **agent**'s output stream -- a `text` chunk, a `toolCall`, or a verbatim `raw` stdout line -- surfaced to the caller of `run()` so the stream can be forwarded to an external observability system. Available only in **log-to-file mode** via the `onAgentStreamEvent` callback on the `logging` option. Each event carries its `iteration` number and a `timestamp`.
 _Avoid_: "log event" (the log file contains more than just agent output), "display entry" (internal UI type)

@@ -21,13 +21,16 @@ import type {
   BranchStrategy,
   BindMountSandboxProvider,
   BindMountSandboxHandle,
+  CredentialSandboxHandle,
   IsolatedSandboxHandle,
   NoSandboxHandle,
 } from "./SandboxProvider.js";
+import { toCredentialHandle } from "./SandboxProvider.js";
 import { runHostHooks, type SandboxHooks } from "./SandboxLifecycle.js";
 import { startSandbox } from "./startSandbox.js";
 import { syncOut } from "./syncOut.js";
 import { patchGitMountsForWindows } from "./mountUtils.js";
+import { preparePrintLaunch } from "./LaunchEnvironment.js";
 
 export interface ExecResult {
   readonly stdout: string;
@@ -43,6 +46,7 @@ export interface SandboxService {
       cwd?: string;
       sudo?: boolean;
       stdin?: string;
+      env?: Record<string, string>;
     },
   ) => Effect.Effect<ExecResult, ExecError>;
 
@@ -98,10 +102,19 @@ const getCopyIn = (
  */
 export const makeSandboxFromHandle = (
   handle: BindMountSandboxHandle | IsolatedSandboxHandle | NoSandboxHandle,
+  sandboxTag: SandboxProvider["tag"],
 ): SandboxService => ({
   exec: (command, options) =>
     Effect.tryPromise({
-      try: () => handle.exec(command, options),
+      try: () => {
+        if (options?.env === undefined) return handle.exec(command, options);
+        const { env, ...otherOptions } = options;
+        const launch = preparePrintLaunch(command, env, sandboxTag);
+        return handle.exec(launch.command, {
+          ...otherOptions,
+          ...(launch.env ? { env: launch.env } : {}),
+        });
+      },
       catch: (e) =>
         new ExecError({
           command,
@@ -142,6 +155,8 @@ export interface SandboxInfo {
   readonly applyToHost?: () => Effect.Effect<void, SyncError>;
   /** The bind-mount sandbox handle, available when the provider is a bind-mount provider. Used for session capture. */
   readonly bindMountHandle?: BindMountSandboxHandle;
+  readonly sandboxTag: SandboxProvider["tag"];
+  readonly credentialHandle?: CredentialSandboxHandle;
 }
 
 export interface WithSandboxResult<A> {
@@ -367,6 +382,7 @@ export const WorktreeDockerSandboxFactory = {
                         {
                           hostWorktreePath: hostRepoDir,
                           sandboxRepoPath: worktreePath,
+                          sandboxTag: "none",
                         },
                         sandbox,
                       ) as Effect.Effect<A, E | SandboxError, R>,
@@ -426,6 +442,7 @@ export const WorktreeDockerSandboxFactory = {
                           {
                             hostWorktreePath: worktreeInfo.path,
                             sandboxRepoPath: worktreePath,
+                            sandboxTag: "none",
                           },
                           sandbox,
                         ),
@@ -487,6 +504,8 @@ export const WorktreeDockerSandboxFactory = {
                           {
                             hostWorktreePath: worktreeInfo.path,
                             sandboxRepoPath: worktreePath,
+                            sandboxTag: "isolated",
+                            credentialHandle: toCredentialHandle(handle),
                             applyToHost: () =>
                               syncOut(
                                 worktreeInfo.path,
@@ -540,18 +559,11 @@ export const WorktreeDockerSandboxFactory = {
               ),
               Effect.flatMap((gitMounts) =>
                 // Patch git mounts for Windows worktree compatibility (ADR-0006)
-                Effect.tryPromise({
-                  try: () =>
-                    patchGitMountsForWindows(
-                      gitMounts,
-                      hostRepoDir,
-                      SANDBOX_REPO_DIR,
-                    ),
-                  catch: (e) =>
-                    new WorktreeError({
-                      message: `Failed to patch git mounts: ${e instanceof Error ? e.message : String(e)}`,
-                    }),
-                }),
+                patchGitMountsForWindows(
+                  gitMounts,
+                  hostRepoDir,
+                  SANDBOX_REPO_DIR,
+                ),
               ),
               Effect.flatMap((gitMounts) =>
                 Effect.acquireUseRelease(
@@ -570,6 +582,8 @@ export const WorktreeDockerSandboxFactory = {
                         hostWorktreePath: hostRepoDir,
                         sandboxRepoPath: worktreePath,
                         bindMountHandle: handle as BindMountSandboxHandle,
+                        sandboxTag: "bind-mount",
+                        credentialHandle: toCredentialHandle(handle),
                       },
                       sandbox,
                     ) as Effect.Effect<A, E | SandboxError, R>,
@@ -638,18 +652,11 @@ export const WorktreeDockerSandboxFactory = {
                 ),
                 // Patch git mounts for Windows worktree compatibility (ADR-0006)
                 Effect.flatMap((gitMounts) =>
-                  Effect.tryPromise({
-                    try: () =>
-                      patchGitMountsForWindows(
-                        gitMounts,
-                        worktreeInfo.path,
-                        SANDBOX_REPO_DIR,
-                      ),
-                    catch: (e) =>
-                      new WorktreeError({
-                        message: `Failed to patch git mounts: ${e instanceof Error ? e.message : String(e)}`,
-                      }),
-                  }),
+                  patchGitMountsForWindows(
+                    gitMounts,
+                    worktreeInfo.path,
+                    SANDBOX_REPO_DIR,
+                  ),
                 ),
                 Effect.flatMap((gitMounts) =>
                   Effect.acquireUseRelease(
@@ -669,6 +676,8 @@ export const WorktreeDockerSandboxFactory = {
                           hostWorktreePath: worktreeInfo.path,
                           sandboxRepoPath: worktreePath,
                           bindMountHandle: handle as BindMountSandboxHandle,
+                          sandboxTag: "bind-mount",
+                          credentialHandle: toCredentialHandle(handle),
                         },
                         sandbox,
                       ),

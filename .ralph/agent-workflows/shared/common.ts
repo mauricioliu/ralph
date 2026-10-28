@@ -52,12 +52,20 @@ export const writeText = (filename: string, value: string): void => {
   fs.writeFileSync(path.join(outputDir(), filename), value);
 };
 
-export const claudeAgent = () =>
-  ralph.claudeCode("claude-opus-4-7", {
-    env: {
-      CLAUDE_CODE_OAUTH_TOKEN: required("CLAUDE_CODE_OAUTH_TOKEN"),
-    },
-  });
+export const piAgent = (role: "planner" | "worker" = "worker") => {
+  const dir = process.env.PI_CODING_AGENT_DIR;
+  return ralph.pi(
+    role === "planner"
+      ? "openai-codex/gpt-6-astra:high"
+      : "zai-coding-cn/glm-5.3:high",
+    dir
+      ? {
+          env: { PI_CODING_AGENT_DIR: dir },
+          sessionStorage: { hostSessionsDir: path.join(dir, "sessions") },
+        }
+      : undefined,
+  );
+};
 
 export const standardSchema = <T>(
   validate: (value: unknown) => T,

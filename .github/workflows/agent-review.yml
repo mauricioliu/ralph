@@ -1,7 +1,12 @@
 name: Agent Review
 
 on:
-  pull_request_target:
+  # pull_request, not pull_request_target: on a fork PR this gets no secrets
+  # and a read-only token, so checking out and running the PR's code is safe.
+  # Same-repo PRs (the ones the agent opens) keep secrets as before.
+  # pull_request does not fire on PRs with merge conflicts (GitHub can't build
+  # the merge ref) — resolving those is agent-update-branch's job.
+  pull_request:
     types: [labeled]
 
 jobs:
@@ -54,14 +59,15 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Install Claude Code
-        run: npm install -g @anthropic-ai/claude-code
+      - name: Install Pi
+        run: npm install -g @earendil-works/pi-coding-agent
 
       - name: Run review agent
         env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          PI_AUTH_JSON: ${{ secrets.PI_AUTH_JSON }}
+          PI_MODELS_STORE_JSON: ${{ secrets.PI_MODELS_STORE_JSON }}
           OUTPUT_DIR: ${{ runner.temp }}
-        run: npx tsx .ralph/agent-workflows/review/review.ts
+        run: npx tsx .ralph/agent-workflows/with-pi-auth.ts .ralph/agent-workflows/review/review.ts
 
       - name: Push branch
         if: success()

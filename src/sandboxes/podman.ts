@@ -2,8 +2,8 @@
  * Podman sandbox provider — creates Podman containers with bind-mounts.
  *
  * Usage:
- *   import { podman } from "ralph/sandboxes/podman";
- *   await run({ agent: claudeCode("claude-opus-4-7"), sandbox: podman() });
+ *   import { podman } from "@mauricioliu/ralph/sandboxes/podman";
+ *   await run({ agent: claudeCode("claude-opus-4-8"), sandbox: podman() });
  */
 
 import {

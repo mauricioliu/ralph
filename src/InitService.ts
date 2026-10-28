@@ -191,13 +191,7 @@ export interface AgentEntry {
   readonly name: string;
   readonly label: string;
   readonly defaultModel: string;
-  /**
-   * Planner/worker model pair, for agents whose scaffolded templates ship a
-   * two-model split (pi). Shown in the init picker hint instead of the
-   * single `Default model: ...` line. The scaffold rewrite-skip guard keeps
-   * the template's split verbatim when this agent is selected without an
-   * explicit `--model`. Absent for single-model agents.
-   */
+  /** Model pair shown in init; the templates own the role-specific defaults. */
   readonly defaultModels?: {
     readonly planner: string;
     readonly worker: string;
@@ -334,7 +328,7 @@ ARG AGENT_UID=1000
 ARG AGENT_GID=1000
 
 # Rename the base image's "node" user to "agent" and align UID/GID.
-RUN groupmod -g $AGENT_GID node && usermod -u $AGENT_UID -g $AGENT_GID -d /home/agent -m -l agent node
+RUN groupmod -o -g $AGENT_GID node && usermod -o -u $AGENT_UID -g $AGENT_GID -d /home/agent -m -l agent node
 USER \${AGENT_UID}:\${AGENT_GID}
 
 # Install Cursor Agent CLI
@@ -387,10 +381,10 @@ ENTRYPOINT ["sleep", "infinity"]
 const COPILOT_DOCKERFILE = `FROM node:22-bookworm
 
 # Install system dependencies
-RUN apt-get update && apt-get install -y \
-  git \
-  curl \
-  jq \
+RUN apt-get update && apt-get install -y \\
+  git \\
+  curl \\
+  jq \\
   && rm -rf /var/lib/apt/lists/*
 
 {{ISSUE_TRACKER_TOOLS}}
@@ -417,53 +411,18 @@ WORKDIR /home/agent
 ENTRYPOINT ["sleep", "infinity"]
 `;
 
-const MINIMAX_DOCKERFILE = `FROM node:22-bookworm
-
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-  git \
-  curl \
-  jq \
-  && rm -rf /var/lib/apt/lists/*
-
-{{ISSUE_TRACKER_TOOLS}}
-
-# Build-args for UID/GID alignment: ralph docker build-image
-# defaults these to the host user's UID/GID so image-built files
-# and bind-mounted files share an owner without runtime chown.
-ARG AGENT_UID=1000
-ARG AGENT_GID=1000
-
-# Rename the base image's "node" user to "agent" and align UID/GID.
-RUN groupmod -o -g $AGENT_GID node && usermod -o -u $AGENT_UID -g $AGENT_GID -d /home/agent -m -l agent node
-
-# Install the MiniMax CLI wrapper (built from src/agents/minimax/)
-COPY --chown=\${AGENT_UID}:\${AGENT_GID} agents/minimax/dist/ /home/agent/.local/bin/
-RUN chmod +x /home/agent/.local/bin/minimax
-
-USER \${AGENT_UID}:\${AGENT_GID}
-
-WORKDIR /home/agent
-
-# Add minimax to PATH
-ENV PATH="/home/agent/.local/bin:$PATH"
-
-# In worktree sandbox mode, Ralph bind-mounts the git worktree at \${SANDBOX_REPO_DIR}
-# and overrides the working directory to \${SANDBOX_REPO_DIR} at container start.
-# Structure your Dockerfile so that \${SANDBOX_REPO_DIR} can serve as the project root.
-ENTRYPOINT ["sleep", "infinity"]
-`;
-
 const AGENT_REGISTRY: AgentEntry[] = [
   {
     name: "claude-code",
     label: "Claude Code",
-    defaultModel: "claude-opus-4-7",
+    defaultModel: "claude-opus-4-8",
     factoryImport: "claudeCode",
     dockerfileTemplate: CLAUDE_CODE_DOCKERFILE,
-    envExample: `# Anthropic API key
-# If you want to use your Claude subscription instead of an API key, see https://github.com/mattpocock/sandcastle/issues/191
-ANTHROPIC_API_KEY=`,
+    envExample: `# Claude Code OAuth token — get one by running \`claude setup-token\` on your host.
+# Lets the agent use your Claude subscription instead of an API key.
+CLAUDE_CODE_OAUTH_TOKEN=
+# Or use an Anthropic API key instead — uncomment and fill in:
+# ANTHROPIC_API_KEY=`,
     setupCommand: `claude "$(cat ${SETUP_ISSUE_TRACKER_PATH})"`,
   },
   {
@@ -471,19 +430,17 @@ ANTHROPIC_API_KEY=`,
     label: "Pi",
     defaultModel: "zai-coding-cn/glm-5.3:high",
     defaultModels: {
-      planner: "openai-codex/gpt-5.6-terra:high",
+      planner: "openai-codex/gpt-6-astra:high",
       worker: "zai-coding-cn/glm-5.3:high",
     },
     factoryImport: "pi",
     dockerfileTemplate: PI_DOCKERFILE,
-    envExample: `# Pi subscription auth — no API key needed.
-# Ralph transfers the host's ~/.pi/agent/auth.json (OAuth tokens for the
-# subscription models, e.g. openai-codex / zai-coding-cn) into each sandbox
-# before the agent starts. Run 'pi' on the host and authenticate once; the
-# host copy stays authoritative.
-# For API-key-based providers instead of subscriptions, set the provider's
-# env var (commented below) in .ralph/.env:
-# ANTHROPIC_API_KEY=`,
+    envExample: `# Pi subscription models do not require API keys here.
+# Authenticate on the host: run pi, then /login for openai-codex and zai-coding-cn.
+# Ralph transfers auth.json and optional models-store.json from PI_CODING_AGENT_DIR
+# (default ~/.pi/agent) into each sandbox before launch; the host stays authoritative.
+# Sandbox refreshes are never copied back. Never commit credential files.
+# For an explicit --model override, configure that model's auth in Pi on the host.`,
     setupCommand: `pi "$(cat ${SETUP_ISSUE_TRACKER_PATH})"`,
   },
   {
@@ -492,8 +449,8 @@ ANTHROPIC_API_KEY=`,
     defaultModel: "gpt-5.4",
     factoryImport: "codex",
     dockerfileTemplate: CODEX_DOCKERFILE,
-    envExample: `# OpenAI API key
-OPENAI_KEY=`,
+    envExample: `# OpenAI API key from platform.openai.com (\`codex exec\` reads CODEX_API_KEY)
+CODEX_API_KEY=`,
     setupCommand: `codex "$(cat ${SETUP_ISSUE_TRACKER_PATH})"`,
   },
   {
@@ -528,19 +485,6 @@ OPENCODE_API_KEY=`,
 # COPILOT_GITHUB_TOKEN takes precedence over GH_TOKEN and GITHUB_TOKEN.
 GITHUB_TOKEN=`,
     setupCommand: `copilot -i "$(cat ${SETUP_ISSUE_TRACKER_PATH})"`,
-  },
-  {
-    name: "minimax",
-    label: "MiniMax",
-    defaultModel: "MiniMax-3.0",
-    factoryImport: "minimax",
-    dockerfileTemplate: MINIMAX_DOCKERFILE,
-    envExample: `# MiniMax OAuth tokens
-# Obtain tokens from https://api.minimax.io/anthropic after OAuth login.
-# The access token is used for API calls; refresh token is used for token renewal.
-MINIMAX_ACCESS_TOKEN=
-MINIMAX_REFRESH_TOKEN=`,
-    setupCommand: `minimax -p --model MiniMax-M3 < ${SETUP_ISSUE_TRACKER_PATH}`,
   },
 ];
 
@@ -695,6 +639,22 @@ export function getNextStepsLines(
   agent: AgentEntry,
   packageManager: PackageManager,
 ): string[] {
+  const piAuthLines =
+    agent.name === "pi"
+      ? [
+          "   On the host, run `pi`, then `/login` for openai-codex and zai-coding-cn. Subscription defaults do not need API keys in .ralph/.env.",
+          "   Ralph transfers auth.json and optional models-store.json from PI_CODING_AGENT_DIR (default ~/.pi/agent) before each sandbox launch. The host stays authoritative; sandbox refreshes are never copied back. Never commit credentials.",
+          "   If you override the model, configure its authentication in Pi on the host instead.",
+        ]
+      : [];
+  const authStep =
+    agent.name === "pi"
+      ? "Authenticate Pi on the host" +
+        (issueTracker.envExample
+          ? "; set your issue tracker's env vars in .ralph/.env (see .ralph/.env.example)"
+          : " (see .ralph/.env.example)")
+      : "Set the required env vars in .ralph/.env (see .ralph/.env.example)";
+
   // The custom issue tracker scaffolds a broken-until-configured project, so
   // its next steps are about running the setup prompt — not the template's
   // normal "set env vars and go" flow. This branch wins over template-specific
@@ -704,32 +664,44 @@ export function getNextStepsLines(
       "Next steps:",
       "1. Your custom issue tracker isn't wired up yet — runs hard-fail until you configure it.",
       `2. Feed the setup prompt to ${agent.label} on your host to finish wiring it up:`,
+      ...piAuthLines,
       `   ${agent.setupCommand}`,
       `   (Runs on the host — you need the ${agent.label} CLI installed locally, since the sandbox image isn't built yet.)`,
       `3. Follow .ralph/${SETUP_ISSUE_TRACKER_DOC} to edit the scaffolded files in place, build the image, and verify.`,
     ];
   }
   if (template === "blank") {
-    return [
-      "Next steps:",
-      `1. Set the required env vars in .ralph/.env (see .ralph/.env.example)`,
-      "   If you want to use your Claude subscription instead of an API key, see https://github.com/mattpocock/sandcastle/issues/191",
+    const lines = ["Next steps:", `1. ${authStep}`, ...piAuthLines];
+    if (agent.name === "claude-code") {
+      lines.push(
+        "   To use your Claude subscription instead of an API key, run `claude setup-token` on your host and paste the result into CLAUDE_CODE_OAUTH_TOKEN.",
+      );
+    }
+    lines.push(
       "2. Read and customize .ralph/prompt.md to describe what you want the agent to do",
       `3. Customize .ralph/${mainFilename} — it uses the JS API (\`run()\`) to control how the agent runs`,
       `4. Add "ralph": "npx tsx .ralph/${mainFilename}" to your package.json scripts`,
       "5. Run `npm run ralph` to start the agent",
-    ];
+    );
+    return lines;
   } else {
     const hasReviewer = template.includes("review");
     const usesPlanSchema = getTemplateDependencies(template).includes("zod");
     let step = 1;
     const lines: string[] = [
       "Next steps:",
-      `${step++}. Set the required env vars in .ralph/.env (see .ralph/.env.example)`,
-      "   If you want to use your Claude subscription instead of an API key, see https://github.com/mattpocock/sandcastle/issues/191",
+      `${step++}. ${authStep}`,
+      ...piAuthLines,
+    ];
+    if (agent.name === "claude-code") {
+      lines.push(
+        "   To use your Claude subscription instead of an API key, run `claude setup-token` on your host and paste the result into CLAUDE_CODE_OAUTH_TOKEN.",
+      );
+    }
+    lines.push(
       `${step++}. Add "ralph": "npx tsx .ralph/${mainFilename}" to your package.json scripts`,
       `${step++}. Templates use \`copyToWorktree: ["node_modules"]\` to copy your host node_modules into the sandbox for fast startup — the \`npm install\` in the onSandboxReady hook is a safety net for platform-specific binaries. Adjust both if you use a different package manager`,
-    ];
+    );
     if (usesPlanSchema) {
       lines.push(
         `${step++}. Install a schema validator for the planner's \`<plan>\` output — the template uses Zod (\`${addDependencyCommand(packageManager, "zod")}\`), but Valibot, ArkType, or any Standard Schema library works (https://standardschema.dev)`,
@@ -811,24 +783,13 @@ const copyTemplateFiles = (
   });
 
 /**
- * Replace the agent factory and sandbox provider in a scaffolded main file.
+ * Replace the agent factory and sandbox provider in a scaffolded main.ts.
  *
- * Templates use `pi` as the default agent factory (ADR 0021) and `docker` as
- * the default sandbox provider. When a different agent, model, or sandbox
- * provider is selected, this function rewrites the imports and factory calls.
- *
- * Rewrite-skip guard (ADR 0021): when the selected agent is `pi` and no model
- * was given, the agent/model rewrite is skipped entirely so the template's
- * planner/worker two-model split survives verbatim — per-project config lives
- * in the scaffolded main file, and a plain `ralph init --agent pi` must not
- * collapse the split. Any other agent (or an explicit model) rewrites every
- * factory call to a single model, falling back to the agent's default model
- * when none was given. The guard keys off the *absence* of a model, not its
- * value, so it stays correct regardless of which factory the templates use as
- * their placeholder. The sandbox-provider rewrite is orthogonal and always
- * runs.
+ * Templates use `pi` and `docker`. Pi without a model keeps the templates'
+ * planner/worker split (ADR 0021). An explicit model or another agent rewrites
+ * every role to one model. Filename and sandbox rewrites always apply.
  */
-export const rewriteMainTs = (
+const rewriteMainTs = (
   configDir: string,
   agent: AgentEntry,
   model: string | undefined,
@@ -854,35 +815,18 @@ export const rewriteMainTs = (
       content = content.replace(/main\.mts/g, "main.ts");
     }
 
-    // Skip the agent/model rewrite for the pi default path so the template's
-    // two-model split survives verbatim (see doc comment above).
     if (agent.name !== "pi" || model !== undefined) {
       const effectiveModel = model ?? agent.defaultModel;
-      // Templates always use `pi` as the placeholder agent factory. Rewrite
-      // the named-import specifier (e.g. `import { run, pi } from …` →
-      // `import { run, codex } from …`) and every call site — both bare
-      // `pi(…)` and member `ralph.pi(…)` — to the selected agent's factory.
-      // `pi` is short enough that a blanket word-boundary replace risks
-      // touching prose, so both rewrites are anchored to import/call syntax.
+      // Anchor the short `pi` name to import/call syntax, not arbitrary prose.
       content = content.replace(
         /(\bimport\s*\{[^}]*?)\bpi\b([^}]*\}\s*from\s*["']@mauricioliu\/ralph["'])/g,
-        `$1${agent.factoryImport}$2`,
+        (_match, prefix: string, suffix: string) =>
+          `${prefix}${agent.factoryImport}${suffix}`,
       );
-      content = content.replace(/\bpi\s*\(/g, `${agent.factoryImport}(`);
-      // Replace the model string in every factory call. The `\s*` after the
-      // opening paren tolerates call sites that span multiple lines — the
-      // model on its own line, options on the lines after it — and only the
-      // string literal is replaced, so trailing options survive untouched.
-      const factoryCallRe = new RegExp(
-        `(${agent.factoryImport}\\(\\s*)(["'])([^"']+)\\2`,
-        "g",
-      );
+      // Handles both pi(...) and ralph.pi(...), retaining trailing options.
       content = content.replace(
-        factoryCallRe,
-        (_match, callPrefix: string) =>
-          // Re-emit the matched prefix (factory, paren, and any whitespace) so
-          // multi-line formatting is preserved, with a double-quoted model.
-          `${callPrefix}"${effectiveModel}"`,
+        /\bpi\s*\(\s*(["'])([^"']+)\1/g,
+        () => `${agent.factoryImport}(${JSON.stringify(effectiveModel)}`,
       );
     }
 
@@ -1063,12 +1007,7 @@ Run your **list** command inside the built image and confirm it returns the open
 
 export interface ScaffoldOptions {
   agent: AgentEntry;
-  /**
-   * Model to rewrite every factory call to. When omitted, non-pi agents fall
-   * back to their default model; for `pi`, omission triggers the rewrite-skip
-   * guard (see `rewriteMainTs`) so the template's planner/worker model split
-   * survives verbatim.
-   */
+  /** Omit for Pi's template model split; other agents use their default model. */
   model?: string;
   templateName?: string;
   createLabel?: boolean;

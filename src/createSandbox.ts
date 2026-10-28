@@ -24,6 +24,7 @@ import { resolvePrompt } from "./PromptResolver.js";
 import { preprocessPrompt } from "./PromptPreprocessor.js";
 import type { LoggingOption, Timeouts } from "./run.js";
 import {
+  buildAgentStreamHandler,
   buildCompletionMessage,
   buildContextWindowLines,
   buildLogFilename,
@@ -46,6 +47,9 @@ import type {
   BindMountSandboxHandle,
   IsolatedSandboxHandle,
   NoSandboxHandle,
+  MergeToHeadBranchStrategy,
+  NamedBranchStrategy,
+  ExecResult,
 } from "./SandboxProvider.js";
 import { startSandbox } from "./startSandbox.js";
 import { syncOut } from "./syncOut.js";
@@ -53,6 +57,10 @@ import * as WorktreeManager from "./WorktreeManager.js";
 import { copyToWorktree } from "./CopyToWorktree.js";
 import { resolveCwd } from "./resolveCwd.js";
 import { patchGitMountsForWindows } from "./mountUtils.js";
+import { assertResumeSessionExists } from "./resumePrecheck.js";
+import { provisionAgentCredentialsEffect } from "./CredentialProvision.js";
+import { prepareInteractiveLaunch } from "./LaunchEnvironment.js";
+import { toCredentialHandle } from "./SandboxProvider.js";
 import { registerShutdown } from "./shutdownRegistry.js";
 
 export interface CreateSandboxOptions {
@@ -83,20 +91,28 @@ export interface CreateSandboxOptions {
   /** @internal Test-only overrides to bypass the sandbox provider. */
   readonly _test?: {
     readonly buildSandbox?: (sandboxDir: string) => SandboxService;
+    /**
+     * Fake bind-mount handle exposed to the orchestrator's session-capture path.
+     * Only honored when `sandbox.tag === "bind-mount"`. Used to exercise the
+     * `bindMountHandle` flow in tests without booting a real container.
+     */
+    readonly bindMountHandle?: BindMountSandboxHandle;
   };
 }
 
-export interface SandboxRunOptions {
-  /** Agent provider to use (e.g. claudeCode("claude-opus-4-7")). */
-  readonly agent: AgentProvider;
-  /** Inline prompt string (mutually exclusive with promptFile). */
-  readonly prompt?: string;
-  /** Path to a prompt file (mutually exclusive with prompt). */
-  readonly promptFile?: string;
+/**
+ * Options accepted by `SandboxRunResult.resume()` / `.fork()`. Mirrors
+ * `ResumeRunResultOptions` in `run.ts` — drops the fields owned by the
+ * captured run (prompt, iteration count, resumeSession/forkSession bookkeeping).
+ *
+ * Defined as the base interface that `SandboxRunOptions` extends — the
+ * interface-extends shape is cheaper for the TS checker than
+ * `Omit<SandboxRunOptions, ...>` (which forces a mapped-type computation
+ * on every reference).
+ */
+export interface ResumeSandboxRunResultOptions {
   /** Key-value map for {{KEY}} placeholder substitution in prompts. */
   readonly promptArgs?: PromptArgs;
-  /** Maximum iterations to run (default: 1). */
-  readonly maxIterations?: number;
   /** Substring(s) the agent emits to stop the iteration loop early. */
   readonly completionSignal?: string | string[];
   /** Idle timeout in seconds. Default: 600. */
@@ -111,12 +127,35 @@ export interface SandboxRunOptions {
    * An `AbortSignal` that cancels the run when aborted.
    *
    * - Pre-aborted signal rejects immediately without setup.
-   * - Mid-iteration abort kills the in-flight agent subprocess.
+   * - Mid-iteration abort cancels awaiting exec; process teardown is provider-dependent.
    * - The rejected promise surfaces `signal.reason` verbatim.
    * - The `Sandbox` handle remains usable after abort — call `.run()` again
    *   with a fresh signal, or `.close()` to tear down.
    */
   readonly signal?: AbortSignal;
+}
+
+export interface SandboxRunOptions extends ResumeSandboxRunResultOptions {
+  /** Agent provider to use (e.g. claudeCode("claude-opus-4-8")). */
+  readonly agent: AgentProvider;
+  /** Inline prompt string (mutually exclusive with promptFile). */
+  readonly prompt?: string;
+  /** Path to a prompt file (mutually exclusive with prompt). */
+  readonly promptFile?: string;
+  /** Maximum iterations to run (default: 1). */
+  readonly maxIterations?: number;
+  /** Resume a prior agent session by id. The session JSONL must exist on the host (captured by a prior `sandbox.run()`). Incompatible with `maxIterations > 1`. */
+  readonly resumeSession?: string;
+  /**
+   * When true alongside `resumeSession`, fork the session instead of mutating
+   * it. The parent session JSONL is left intact and the agent writes a new
+   * session under a fresh id. Exposed as the public `.fork()` method on
+   * `SandboxRunResult` rather than as a stand-alone caller option — see
+   * ADR 0018.
+   *
+   * @internal
+   */
+  readonly forkSession?: boolean;
 }
 
 export interface SandboxRunResult {
@@ -130,10 +169,32 @@ export interface SandboxRunResult {
   readonly commits: { sha: string }[];
   /** Path to the log file, if logging was drained to a file. */
   readonly logFilePath?: string;
+  /**
+   * Continue the last captured agent session for exactly one iteration inside
+   * the same long-lived sandbox. Present only when the provider supports
+   * resume (`sessionStorage` populated) and a session id was captured.
+   */
+  readonly resume?: (
+    prompt: string,
+    options?: ResumeSandboxRunResultOptions,
+  ) => Promise<SandboxRunResult>;
+  /**
+   * Fork the last captured agent session for exactly one iteration inside the
+   * same long-lived sandbox: the parent session JSONL is left intact and the
+   * child run gets its own session id. Present only when the provider
+   * supports resume (`sessionStorage` populated) and a session id was
+   * captured. Pi exposes this generic handle but rejects session forks;
+   * only capture and in-place resume are supported for Pi. See ADR 0018
+   * for the supported Claude Code and Codex fork semantics.
+   */
+  readonly fork?: (
+    prompt: string,
+    options?: ResumeSandboxRunResultOptions,
+  ) => Promise<SandboxRunResult>;
 }
 
 export interface SandboxInteractiveOptions {
-  /** Agent provider to use (e.g. claudeCode("claude-opus-4-7")). */
+  /** Agent provider to use (e.g. claudeCode("claude-opus-4-8")). */
   readonly agent: AgentProvider;
   /** Inline prompt string (mutually exclusive with promptFile). */
   readonly prompt?: string;
@@ -176,10 +237,34 @@ export interface Sandbox {
   interactive(
     options: SandboxInteractiveOptions,
   ): Promise<SandboxInteractiveResult>;
+  /**
+   * Execute a command inside the existing sandbox.
+   *
+   * `cwd` defaults to the sandbox repo path (same default `interactive()`
+   * uses), so callers get the same working directory across providers. Pass
+   * `cwd` to override.
+   *
+   * Returns the full `ExecResult` — non-zero `exitCode` is surfaced, not
+   * thrown. Callers that want strict semantics should check `result.exitCode`
+   * themselves (matching the contract of `BindMountSandboxHandle.exec`).
+   */
+  exec(command: string, options?: SandboxExecOptions): Promise<ExecResult>;
   /** Tear down the sandbox and worktree. */
   close(): Promise<CloseResult>;
   /** Auto teardown via `await using`. */
   [Symbol.asyncDispose](): Promise<void>;
+}
+
+/** Options accepted by `Sandbox.exec()`. Mirrors the provider handle's `exec` options. */
+export interface SandboxExecOptions {
+  /** Per-line stdout callback for streaming output. */
+  readonly onLine?: (line: string) => void;
+  /** Working directory for the command. Defaults to the sandbox repo path. */
+  readonly cwd?: string;
+  /** Run the command with sudo, when the provider supports it. */
+  readonly sudo?: boolean;
+  /** Stdin payload — piped to the child process and then closed. Avoids the Linux 128 KB per-arg limit. */
+  readonly stdin?: string;
 }
 
 /** @internal Context for building Sandbox handle methods. */
@@ -194,8 +279,26 @@ interface SandboxHandleContext {
     | IsolatedSandboxHandle
     | NoSandboxHandle
     | undefined;
+  /**
+   * Pre-narrowed bind-mount handle, set when the provider is a bind-mount
+   * provider. Required by the orchestrator's session capture path
+   * (`AgentSessionStorage.captureToHost/resumeIntoSandbox`), which is typed
+   * on `BindMountSandboxHandle` and calls `copyFileOut`/`copyFileIn` —
+   * methods that no-sandbox and isolated handles do not implement.
+   */
+  readonly bindMountHandle: BindMountSandboxHandle | undefined;
+  /** Provider tag, used by resumeSession to dispatch the host-side session lookup. */
+  readonly providerTag: SandboxProvider["tag"];
+  /** Test overrides run on the host; keep their session handle separate. */
+  readonly credentialSandboxTag: SandboxProvider["tag"];
   readonly applyToHost: () => Effect.Effect<void, any>;
   readonly timeouts?: Timeouts;
+  /** Worktree branch strategy. Set only when the handle is backed by a
+   *  `createWorktree(...)` handle; absent for top-level `createSandbox()`,
+   *  which is always explicit-branch. When `type === "merge-to-head"`, each
+   *  run()/interactive() routes through the lifecycle's merge step and the
+   *  worktree's source branch is preserved across calls. */
+  readonly branchStrategy?: MergeToHeadBranchStrategy | NamedBranchStrategy;
 }
 
 /**
@@ -215,9 +318,17 @@ const buildSandboxHandle = (
     sandboxRepoDir,
     sandbox,
     providerHandle,
+    bindMountHandle,
     applyToHost,
     timeouts,
+    branchStrategy,
   } = ctx;
+  // Routing for the lifecycle: in merge-to-head mode pass `branch: undefined`
+  // (so the lifecycle records host's current branch and merges back) and keep
+  // the worktree's source branch alive for subsequent calls. In all other
+  // cases (top-level createSandbox, named-branch worktree) forward `branch`
+  // as-is and let the lifecycle delete the temp branch normally.
+  const mergeToHead = branchStrategy?.type === "merge-to-head";
 
   const sandboxHandle: Sandbox = {
     branch,
@@ -233,6 +344,32 @@ const buildSandboxHandle = (
         promptFile,
         maxIterations = 1,
       } = runOptions;
+
+      // Validate: resumeSession + maxIterations > 1 is not allowed.
+      if (runOptions.resumeSession && maxIterations > 1) {
+        throw new Error(
+          "resumeSession cannot be combined with maxIterations > 1. " +
+            "Resume applies to iteration 1 only; multi-iteration resume semantics are not supported.",
+        );
+      }
+
+      // Validate: forkSession only makes sense alongside resumeSession.
+      if (runOptions.forkSession && !runOptions.resumeSession) {
+        throw new Error(
+          "forkSession requires resumeSession. " +
+            "Use sandboxRunResult.fork(prompt) to fork the most recent captured session.",
+        );
+      }
+
+      // Validate: resumeSession file must exist on the host before launching.
+      if (runOptions.resumeSession) {
+        await assertResumeSessionExists({
+          provider,
+          sandboxTag: ctx.providerTag,
+          hostRepoDir,
+          resumeSession: runOptions.resumeSession,
+        });
+      }
 
       const resolved = await Effect.runPromise(
         resolvePrompt({ prompt, promptFile }).pipe(
@@ -303,6 +440,11 @@ const buildSandboxHandle = (
               hostWorktreePath: worktreePath,
               sandboxRepoPath: sandboxRepoDir,
               applyToHost,
+              bindMountHandle,
+              sandboxTag: ctx.credentialSandboxTag,
+              credentialHandle: providerHandle
+                ? toCredentialHandle(providerHandle)
+                : undefined,
             },
             sandbox,
           ).pipe(
@@ -314,9 +456,7 @@ const buildSandboxHandle = (
       });
 
       const streamEmitterLayer = agentStreamEmitterLayer(
-        resolvedLogging.type === "file"
-          ? resolvedLogging.onAgentStreamEvent
-          : undefined,
+        buildAgentStreamHandler(resolvedLogging),
       );
 
       const runLayer = Layer.mergeAll(
@@ -336,15 +476,18 @@ const buildSandboxHandle = (
               hostRepoDir,
               iterations: maxIterations,
               prompt: resolvedPrompt,
-              branch,
+              branch: mergeToHead ? undefined : branch,
               provider,
               completionSignal: runOptions.completionSignal,
               idleTimeoutSeconds: runOptions.idleTimeoutSeconds,
               completionTimeoutSeconds: runOptions.completionTimeoutSeconds,
               name: runOptions.name,
+              resumeSession: runOptions.resumeSession,
+              forkSession: runOptions.forkSession,
               signal: runOptions.signal,
               skipPromptExpansion: isInlinePrompt,
               timeouts,
+              keepSourceBranch: mergeToHead,
             });
 
             const completion = buildCompletionMessage(
@@ -368,7 +511,7 @@ const buildSandboxHandle = (
         throw error;
       }
 
-      return {
+      const baseResult: SandboxRunResult = {
         iterations: result.iterations,
         completionSignal: result.completionSignal,
         stdout: result.stdout,
@@ -376,6 +519,45 @@ const buildSandboxHandle = (
         logFilePath:
           resolvedLogging.type === "file" ? resolvedLogging.path : undefined,
       };
+
+      // Expose .resume()/.fork() only when the provider supports session
+      // capture and a session id was actually captured on the last iteration.
+      // The functions re-enter the same long-lived sandbox by calling
+      // sandboxHandle.run() — container and worktree stay warm.
+      const lastIteration = result.iterations.at(-1);
+      if (provider.sessionStorage && lastIteration?.sessionId) {
+        const capturedSessionId = lastIteration.sessionId;
+        return {
+          ...baseResult,
+          resume: (
+            nextPrompt: string,
+            resumeOptions?: ResumeSandboxRunResultOptions,
+          ): Promise<SandboxRunResult> =>
+            sandboxHandle.run({
+              ...runOptions,
+              ...resumeOptions,
+              prompt: nextPrompt,
+              promptFile: undefined,
+              maxIterations: 1,
+              resumeSession: capturedSessionId,
+            }),
+          fork: (
+            nextPrompt: string,
+            forkOptions?: ResumeSandboxRunResultOptions,
+          ): Promise<SandboxRunResult> =>
+            sandboxHandle.run({
+              ...runOptions,
+              ...forkOptions,
+              prompt: nextPrompt,
+              promptFile: undefined,
+              maxIterations: 1,
+              resumeSession: capturedSessionId,
+              forkSession: true,
+            }),
+        };
+      }
+
+      return baseResult;
     },
 
     interactive: async (
@@ -400,11 +582,18 @@ const buildSandboxHandle = (
       }
       const interactiveExecFn =
         providerHandle.interactiveExec.bind(providerHandle);
+      const sandboxTag = ctx.credentialSandboxTag;
 
       let lifecycleResult;
       try {
         lifecycleResult = await Effect.runPromise(
           Effect.gen(function* () {
+            yield* provisionAgentCredentialsEffect({
+              provider,
+              sandboxTag: ctx.credentialSandboxTag,
+              credentialHandle: toCredentialHandle(providerHandle),
+              signal: interactiveOptions.signal,
+            });
             const resolved = yield* resolvePrompt({ prompt, promptFile });
             const rawPrompt = resolved.text;
             const isInlinePrompt = resolved.source === "inline";
@@ -438,10 +627,11 @@ const buildSandboxHandle = (
               {
                 hostRepoDir,
                 sandboxRepoDir,
-                branch,
+                branch: mergeToHead ? undefined : branch,
                 hostWorktreePath: worktreePath,
                 applyToHost,
                 timeouts,
+                keepSourceBranch: mergeToHead,
               },
               sandbox,
               (ctx) =>
@@ -458,12 +648,19 @@ const buildSandboxHandle = (
                     prompt: fullPrompt,
                     dangerouslySkipPermissions: true,
                   });
-                  const execPromise = interactiveExecFn(interactiveArgs, {
-                    stdin: process.stdin,
-                    stdout: process.stdout,
-                    stderr: process.stderr,
-                    cwd: sandboxRepoDir,
-                  });
+                  const execPromise = interactiveExecFn(
+                    ...prepareInteractiveLaunch(
+                      interactiveArgs,
+                      {
+                        stdin: process.stdin,
+                        stdout: process.stdout,
+                        stderr: process.stderr,
+                        cwd: sandboxRepoDir,
+                      },
+                      provider.launchEnv,
+                      sandboxTag,
+                    ),
+                  );
 
                   // Race exec with abort signal if provided
                   const signal = interactiveOptions.signal;
@@ -510,6 +707,18 @@ const buildSandboxHandle = (
       };
     },
 
+    exec: async (
+      command: string,
+      options?: SandboxExecOptions,
+    ): Promise<ExecResult> => {
+      const mergedOptions = { cwd: sandboxRepoDir, ...options };
+      if (providerHandle) {
+        return providerHandle.exec(command, mergedOptions);
+      }
+      // Test-mode fallback: no providerHandle, only the Effect SandboxService.
+      return Effect.runPromise(sandbox.exec(command, mergedOptions));
+    },
+
     close: async (): Promise<CloseResult> => close(),
 
     [Symbol.asyncDispose]: async (): Promise<void> => {
@@ -529,8 +738,19 @@ export interface CreateSandboxFromWorktreeOptions {
   readonly hooks?: SandboxHooks;
   readonly copyToWorktree?: string[];
   readonly timeouts?: Timeouts;
+  /** Forwarded to the Sandbox handle. Set by `createWorktree` so the handle
+   *  can route run()/interactive() correctly: for `merge-to-head`, each call
+   *  merges back to the host's current branch and the worktree's source
+   *  branch is preserved; for `branch`, the lifecycle is driven as
+   *  explicit-branch mode. Absent for top-level `createSandbox()`. */
+  readonly branchStrategy?: MergeToHeadBranchStrategy | NamedBranchStrategy;
   readonly _test?: {
     readonly buildSandbox?: (sandboxDir: string) => SandboxService;
+    /**
+     * Fake bind-mount handle exposed to the orchestrator's session-capture path.
+     * Only honored when `sandbox.tag === "bind-mount"`.
+     */
+    readonly bindMountHandle?: BindMountSandboxHandle;
   };
 }
 
@@ -574,6 +794,7 @@ export const createSandboxFromWorktree = async (
   if (isTestMode) {
     sandbox = options._test!.buildSandbox!(worktreePath);
     sandboxRepoDir = worktreePath;
+    providerHandle = options._test!.bindMountHandle;
   } else {
     const resolvedEnv = await Effect.runPromise(
       resolveEnv(hostRepoDir).pipe(Effect.provide(NodeContext.layer)),
@@ -607,18 +828,7 @@ export const createSandboxFromWorktree = async (
         Effect.catchAll(() => Effect.succeed([])),
         // Patch git mounts for Windows worktree compatibility (ADR-0006)
         Effect.flatMap((gitMounts) =>
-          Effect.tryPromise({
-            try: () =>
-              patchGitMountsForWindows(
-                gitMounts,
-                worktreePath,
-                SANDBOX_REPO_DIR,
-              ),
-            catch: (e) =>
-              new Error(
-                `Failed to patch git mounts: ${e instanceof Error ? e.message : String(e)}`,
-              ),
-          }),
+          patchGitMountsForWindows(gitMounts, worktreePath, SANDBOX_REPO_DIR),
         ),
         Effect.flatMap((gitMounts) =>
           startSandbox({
@@ -679,6 +889,15 @@ export const createSandboxFromWorktree = async (
   // 5. Build and return sandbox handle — container-only close (worktree owns worktree)
   let closed = false;
 
+  // Pre-narrow the bind-mount handle for the orchestrator's session-capture
+  // path. Gating on the provider tag avoids handing a NoSandbox/Isolated
+  // handle (which lack copyFileIn/copyFileOut) to AgentSessionStorage and
+  // turning a missing-feature into a runtime SessionCaptureError.
+  const bindMountHandle =
+    options.sandbox.tag === "bind-mount"
+      ? (providerHandle as BindMountSandboxHandle | undefined)
+      : undefined;
+
   return buildSandboxHandle(
     {
       branch,
@@ -687,8 +906,12 @@ export const createSandboxFromWorktree = async (
       sandboxRepoDir,
       sandbox,
       providerHandle,
+      bindMountHandle,
+      providerTag: options.sandbox.tag,
+      credentialSandboxTag: isTestMode ? "none" : options.sandbox.tag,
       applyToHost,
       timeouts: options.timeouts,
+      branchStrategy: options.branchStrategy,
     },
     async () => {
       if (closed) return { preservedWorktreePath: undefined };
@@ -763,6 +986,7 @@ export const createSandbox = async (
           if (isTestMode) {
             sandbox = options._test!.buildSandbox!(worktreePath);
             sandboxRepoDir = worktreePath;
+            providerHandle = options._test!.bindMountHandle;
           } else {
             const resolvedEnv = yield* resolveEnv(hostRepoDir);
             const env = mergeProviderEnv({
@@ -791,18 +1015,11 @@ export const createSandbox = async (
                     Effect.catchAll(() => Effect.succeed([])),
                     // Patch git mounts for Windows worktree compatibility (ADR-0006)
                     Effect.flatMap((gitMounts) =>
-                      Effect.tryPromise({
-                        try: () =>
-                          patchGitMountsForWindows(
-                            gitMounts,
-                            worktreePath,
-                            SANDBOX_REPO_DIR,
-                          ),
-                        catch: (e) =>
-                          new Error(
-                            `Failed to patch git mounts: ${e instanceof Error ? e.message : String(e)}`,
-                          ),
-                      }),
+                      patchGitMountsForWindows(
+                        gitMounts,
+                        worktreePath,
+                        SANDBOX_REPO_DIR,
+                      ),
                     ),
                     Effect.flatMap((gitMounts) =>
                       startSandbox({
@@ -915,6 +1132,14 @@ export const createSandbox = async (
     );
   };
 
+  // Pre-narrow the bind-mount handle for the orchestrator's session-capture
+  // path. Gating on the provider tag avoids handing a NoSandbox/Isolated
+  // handle (which lack copyFileIn/copyFileOut) to AgentSessionStorage.
+  const bindMountHandle =
+    options.sandbox.tag === "bind-mount"
+      ? (providerHandle as BindMountSandboxHandle | undefined)
+      : undefined;
+
   // Return the Sandbox handle
   return buildSandboxHandle(
     {
@@ -924,6 +1149,9 @@ export const createSandbox = async (
       sandboxRepoDir,
       sandbox,
       providerHandle,
+      bindMountHandle,
+      providerTag: options.sandbox.tag,
+      credentialSandboxTag: isTestMode ? "none" : options.sandbox.tag,
       applyToHost,
       timeouts: options.timeouts,
     },

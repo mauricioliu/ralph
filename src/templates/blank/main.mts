@@ -6,7 +6,6 @@ import { docker } from "@mauricioliu/ralph/sandboxes/docker";
 // Or add to package.json scripts: "ralph": "npx tsx .ralph/main.mts"
 
 await run({
-  // The lone agent runs on the worker model (a lone agent is a worker).
   agent: pi("zai-coding-cn/glm-5.3:high"),
   sandbox: docker(),
   promptFile: "./.ralph/prompt.md",

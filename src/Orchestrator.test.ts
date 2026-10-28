@@ -23,6 +23,7 @@ import {
   codex as codexFactory,
   opencode as opencodeFactory,
   pi as piFactory,
+  DEFAULT_MODEL,
 } from "./AgentProvider.js";
 import type { SandboxService } from "./SandboxFactory.js";
 import type { DockerError, SandboxError } from "./errors.js";
@@ -136,6 +137,7 @@ const makeTestSandboxFactory = (
             {
               hostWorktreePath: sandboxBaseDir,
               sandboxRepoPath: sandboxBaseDir,
+              sandboxTag: "none", // Host-only synthetic runner.
               applyToHost: () => Effect.void,
             },
             buildSandbox(sandboxBaseDir),
@@ -748,6 +750,7 @@ describe("OrchestrateResult", () => {
               {
                 hostWorktreePath: sandboxBaseDir,
                 sandboxRepoPath: sandboxBaseDir,
+                sandboxTag: "none", // Host-only synthetic runner.
                 applyToHost: () => Effect.void,
               },
               makeMockAgentLayer(sandboxBaseDir, async (repoDir) => {
@@ -1273,6 +1276,98 @@ describe("Orchestrator agent stream emitter", () => {
 
     expect(result.completionSignal).toBe("<promise>COMPLETE</promise>");
   });
+
+  it("emits raw events for every line including lines parseStreamLine drops", async () => {
+    const hostDir = await mkdtemp(join(tmpdir(), "orch-stream-raw-"));
+    await initRepo(hostDir);
+    await commitFile(hostDir, "hello.txt", "hello", "initial commit");
+
+    const ref = Ref.unsafeMake<ReadonlyArray<DisplayEntry>>([]);
+    const displayLayer = SilentDisplay.layer(ref);
+
+    const events: AgentStreamEvent[] = [];
+    const emitterLayer = agentStreamEmitterLayer((e) => {
+      events.push(e);
+    });
+
+    // Lines: one valid stream-JSON line that yields a typed event, one valid
+    // stream-JSON line that parseStreamLine deliberately drops (unrecognised
+    // tool — not in TOOL_ARG_FIELDS), and one plain non-JSON line. All three
+    // must surface as raw events.
+    const droppedToolLine = JSON.stringify({
+      type: "assistant",
+      message: {
+        content: [
+          {
+            type: "tool_use",
+            name: "TotallyUnknownTool",
+            input: { foo: "bar" },
+          },
+        ],
+      },
+    });
+    const plainLine = "raw TUI output: rendering panel...";
+    const recognisedLine = JSON.stringify({
+      type: "assistant",
+      message: { content: [{ type: "text", text: "Hello there" }] },
+    });
+    const resultLine = JSON.stringify({
+      type: "result",
+      result: "<promise>COMPLETE</promise>",
+    });
+
+    const mockLayer = makeTestSandboxFactory(hostDir, (dir) => {
+      const real = makeLocalSandbox(dir);
+      return {
+        exec: (command, options) => {
+          if (command.startsWith("claude ") && options?.onLine) {
+            const onLine = options.onLine;
+            const lines = [
+              droppedToolLine,
+              plainLine,
+              recognisedLine,
+              resultLine,
+            ];
+            for (const line of lines) onLine(line);
+            return Effect.succeed({
+              stdout: lines.join("\n"),
+              stderr: "",
+              exitCode: 0,
+            });
+          }
+          return real.exec(command, options);
+        },
+        copyIn: (hostPath, sandboxPath) => real.copyIn(hostPath, sandboxPath),
+        copyFileOut: (sandboxPath, hostPath) =>
+          real.copyFileOut(sandboxPath, hostPath),
+      };
+    });
+
+    await Effect.runPromise(
+      orchestrate({
+        provider: testProvider,
+        hostRepoDir: hostDir,
+        iterations: 1,
+        prompt: "do work",
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(mockLayer.factoryLayer, displayLayer, emitterLayer),
+        ),
+      ),
+    );
+
+    const rawEvents = events.filter((e) => e.type === "raw");
+    const rawLines = rawEvents.map((e) => e.line);
+
+    expect(rawLines).toEqual([
+      droppedToolLine,
+      plainLine,
+      recognisedLine,
+      resultLine,
+    ]);
+    expect(rawEvents[0]!.iteration).toBe(1);
+    expect(rawEvents[0]!.timestamp).toBeInstanceOf(Date);
+  });
 });
 
 describe("Orchestrator error handling", () => {
@@ -1319,14 +1414,14 @@ describe("Orchestrator error handling", () => {
     expect(exit._tag).toBe("Failure");
   });
 
-  it("uses only parsed assistant text when stream has no result line", async () => {
+  it("falls back to stdout when stream has no result line", async () => {
     const hostDir = await mkdtemp(join(tmpdir(), "orch-fallback-host-"));
 
     await initRepo(hostDir);
     await commitFile(hostDir, "hello.txt", "hello", "initial commit");
 
     // Layer where agent stream emits only assistant lines, no result line.
-    // A marker in raw stdout must not override the actual assistant text.
+    // stdout contains the completion signal so the fallback path picks it up.
     const { factoryLayer, sandboxRepoDir } = makeTestSandboxFactory(
       hostDir,
       (dir) => {
@@ -1367,9 +1462,9 @@ describe("Orchestrator error handling", () => {
       }).pipe(Effect.provide(Layer.merge(factoryLayer, testDisplayLayer))),
     );
 
-    expect(result.iterations.length).toBe(5);
-    expect(result.completionSignal).toBeUndefined();
-    expect(result.stdout).toBe("working...".repeat(5));
+    // Should detect COMPLETE from the stdout fallback
+    expect(result.iterations.length).toBe(1);
+    expect(result.completionSignal).toBe("<promise>COMPLETE</promise>");
   });
 
   it("preserves iteration 1 work when agent fails on iteration 2", async () => {
@@ -1786,7 +1881,7 @@ describe("Orchestrator streaming", () => {
 
     await Effect.runPromise(
       orchestrate({
-        provider: claudeCode("claude-opus-4-7"),
+        provider: claudeCode(DEFAULT_MODEL),
         hostRepoDir: hostDir,
 
         iterations: 1,
@@ -1794,7 +1889,7 @@ describe("Orchestrator streaming", () => {
       }).pipe(Effect.provide(Layer.merge(factoryLayer, testDisplayLayer))),
     );
 
-    expect(capturedCommand).toContain(`--model 'claude-opus-4-7'`);
+    expect(capturedCommand).toContain(`--model '${DEFAULT_MODEL}'`);
   });
 
   it("uses the model from a custom provider", async () => {
@@ -1845,7 +1940,7 @@ describe("Orchestrator streaming", () => {
     );
 
     expect(capturedCommand).toContain("--model 'claude-sonnet-4-6'");
-    expect(capturedCommand).not.toContain("claude-opus-4-7");
+    expect(capturedCommand).not.toContain(DEFAULT_MODEL);
   });
 });
 
@@ -2647,7 +2742,15 @@ describe("Orchestrator with pi provider", () => {
       : {}),
   });
 
-  const replayPi = async (events: unknown[], hang = false) => {
+  const replayPi = async (
+    events: unknown[],
+    hang = false,
+    replayOptions: {
+      exitCode?: number;
+      streamEvents?: AgentStreamEvent[];
+      signal?: AbortSignal;
+    } = {},
+  ) => {
     const hostDir = await mkdtemp(join(tmpdir(), "orch-pi-replay-"));
     await initRepo(hostDir);
     await commitFile(hostDir, "hello.txt", "hello", "initial commit");
@@ -2661,7 +2764,11 @@ describe("Orchestrator with pi provider", () => {
             const lines = events.map((event) => JSON.stringify(event));
             for (const line of lines) options?.onLine?.(line);
             if (hang) yield* Effect.never;
-            return { stdout: lines.join("\n"), stderr: "", exitCode: 0 };
+            return {
+              stdout: lines.join("\n"),
+              stderr: "",
+              exitCode: replayOptions.exitCode ?? 0,
+            };
           });
         },
       };
@@ -2675,7 +2782,20 @@ describe("Orchestrator with pi provider", () => {
           prompt: `Do work, then emit ${marker}`,
           idleTimeoutSeconds: 0.1,
           completionTimeoutSeconds: 0.01,
-        }).pipe(Effect.provide(Layer.merge(factoryLayer, testDisplayLayer))),
+          signal: replayOptions.signal,
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              factoryLayer,
+              SilentDisplay.layer(
+                Ref.unsafeMake<ReadonlyArray<DisplayEntry>>([]),
+              ),
+              agentStreamEmitterLayer((event) => {
+                replayOptions.streamEvents?.push(event);
+              }),
+            ),
+          ),
+        ),
       );
     } finally {
       await rm(hostDir, { recursive: true, force: true });
@@ -2701,6 +2821,7 @@ describe("Orchestrator with pi provider", () => {
       { mystery: marker },
     ]);
     expect(result.completionSignal).toBeUndefined();
+    expect(result.stdout).toBe("");
   });
 
   it.each(["error", "aborted"])(
@@ -2760,6 +2881,164 @@ describe("Orchestrator with pi provider", () => {
     ]);
     expect(result.completionSignal).toBeUndefined();
   });
+  it.each([false, true])(
+    "rejects exhausted retries after COMPLETE (hanging: %s)",
+    async (hang) => {
+      await expect(
+        replayPi(
+          [
+            { type: "message_end", message: assistant(marker) },
+            {
+              type: "auto_retry_end",
+              success: false,
+              finalError: "synthetic retries exhausted",
+            },
+          ],
+          hang,
+        ),
+      ).rejects.toThrow(/synthetic retries exhausted/);
+    },
+  );
+
+  it.each(["agent_error", "error"])(
+    "rejects a %s after COMPLETE even if its diagnostic contains COMPLETE",
+    async (type) => {
+      await expect(
+        replayPi([
+          { type: "message_end", message: assistant(marker) },
+          { type, error: `failed ${marker}` },
+        ]),
+      ).rejects.toThrow(/failed/);
+    },
+  );
+
+  it.each([
+    { type: "message_start", message: assistant("") },
+    { type: "auto_retry_start", attempt: 1 },
+  ])("revokes the completion grace timer on $type", async (restart) => {
+    await expect(
+      replayPi(
+        [{ type: "message_end", message: assistant(marker) }, restart],
+        true,
+      ),
+    ).rejects.toThrow(/Agent idle/);
+  });
+
+  it("requires a successful final message to recover from an error, not just streamed text", async () => {
+    await expect(
+      replayPi(
+        [
+          { type: "error", message: "synthetic failure" },
+          { type: "auto_retry_start", attempt: 1 },
+          {
+            type: "message_update",
+            assistantMessageEvent: { type: "text_delta", delta: marker },
+          },
+          { type: "auto_retry_end", success: true },
+        ],
+        true,
+      ),
+    ).rejects.toThrow(/synthetic failure/);
+  });
+
+  it("does not let agent_end replay a pre-error completion as recovery", async () => {
+    const previous = assistant(marker);
+    await expect(
+      replayPi([
+        { type: "message_end", message: previous },
+        { type: "error", message: "synthetic later failure" },
+        { type: "agent_end", messages: [previous] },
+      ]),
+    ).rejects.toThrow(/synthetic later failure/);
+  });
+
+  it("replaces a streamed COMPLETE with an authoritative empty result", async () => {
+    const result = await replayPi([
+      {
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: marker },
+      },
+      { type: "message_end", message: assistant("") },
+    ]);
+    expect(result.completionSignal).toBeUndefined();
+    expect(result.stdout).toBe("");
+  });
+
+  it("does not infer completion by concatenating a text delta with a repeated final result", async () => {
+    const result = await replayPi([
+      {
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: "<promise>COMP" },
+      },
+      { type: "message_end", message: assistant("LETE</promise>") },
+    ]);
+    expect(result.completionSignal).toBeUndefined();
+  });
+
+  it("still rejects a nonzero process exit after COMPLETE", async () => {
+    await expect(
+      replayPi([{ type: "message_end", message: assistant(marker) }], false, {
+        exitCode: 7,
+      }),
+    ).rejects.toThrow(/pi exited with code 7/);
+  });
+
+  it("preserves streaming and every raw event while completing a hanging healthy stream", async () => {
+    const streamEvents: AgentStreamEvent[] = [];
+    const events = [
+      { type: "message_start", message: assistant("") },
+      {
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: marker },
+      },
+      {
+        type: "tool_execution_start",
+        toolName: "Bash",
+        args: { command: "synthetic command (not executed)" },
+      },
+      { type: "agent_end", messages: [assistant(marker)] },
+      { type: "unrecognized_event", data: "still forwarded" },
+    ];
+    const result = await replayPi(events, true, { streamEvents });
+    expect(result.completionSignal).toBe(marker);
+    expect(result.stdout).toBe(marker);
+    expect(
+      streamEvents
+        .filter((event) => event.type === "raw")
+        .map((event) => event.line),
+    ).toEqual(events.map((event) => JSON.stringify(event)));
+    expect(
+      streamEvents.some(
+        (event) => event.type === "text" && event.message.includes(marker),
+      ),
+    ).toBe(true);
+    expect(
+      streamEvents.some(
+        (event) => event.type === "toolCall" && event.name === "Bash",
+      ),
+    ).toBe(true);
+  });
+
+  it("preserves cancellation of a Pi stream", async () => {
+    const controller = new AbortController();
+    const reason = new Error("synthetic Pi cancellation");
+    const streamEvents: AgentStreamEvent[] = [];
+    // Abort from a stream callback so the test does not depend on git setup timing.
+    const originalPush = streamEvents.push.bind(streamEvents);
+    streamEvents.push = (...events) => {
+      const length = originalPush(...events);
+      if (events.some((event) => event.type === "raw"))
+        controller.abort(reason);
+      return length;
+    };
+    await expect(
+      replayPi([{ type: "message_start", message: assistant("") }], true, {
+        signal: controller.signal,
+        streamEvents,
+      }),
+    ).rejects.toThrow(/synthetic Pi cancellation/);
+  });
+
   it("runs a single iteration with pi provider and produces a commit", async () => {
     const hostDir = await mkdtemp(join(tmpdir(), "orch-pi-host-"));
     await initRepo(hostDir);
@@ -2907,7 +3186,7 @@ describe("Orchestrator with pi provider", () => {
 
     const entries = await Effect.runPromise(Ref.get(ref));
     const textEntries = entries.filter(
-      (e): e is DisplayEntry & { _tag: "text" } => e._tag === "text",
+      (e): e is DisplayEntry & { _tag: "textChunk" } => e._tag === "textChunk",
     );
 
     // 13 individual text_delta events were streamed, but buffering should
@@ -2989,12 +3268,12 @@ describe("Orchestrator with pi provider", () => {
 
     // Find the text and toolCall entries
     const relevantEntries = entries.filter(
-      (e) => e._tag === "text" || e._tag === "toolCall",
+      (e) => e._tag === "textChunk" || e._tag === "toolCall",
     );
 
     // Text "thinking" must appear BEFORE the tool call
     const textIdx = relevantEntries.findIndex(
-      (e) => e._tag === "text" && e.message === "thinking",
+      (e) => e._tag === "textChunk" && e.message === "thinking",
     );
     const toolIdx = relevantEntries.findIndex((e) => e._tag === "toolCall");
     expect(textIdx).toBeGreaterThanOrEqual(0);
@@ -3254,6 +3533,7 @@ describe("Session capture integration", () => {
                 sandboxRepoPath: sandboxBaseDir,
                 applyToHost: () => Effect.void,
                 bindMountHandle: handle,
+                sandboxTag: "none", // Session-only mock; no credential sandbox.
               },
               sandbox,
             ) as Effect.Effect<A, E | DockerError, R>;
@@ -3606,6 +3886,7 @@ describe("Session capture integration", () => {
                 sandboxRepoPath: sandboxBaseDir,
                 applyToHost: () => Effect.void,
                 bindMountHandle: handle,
+                sandboxTag: "none", // Session-only mock; no credential sandbox.
               },
               sandbox,
             ) as Effect.Effect<A, E | DockerError, R>;
@@ -3684,7 +3965,7 @@ describe("Session capture integration", () => {
             JSON.stringify({
               type: "assistant",
               message: {
-                model: "claude-opus-4-7",
+                model: "claude-opus-4-8",
                 usage: {
                   input_tokens: 3,
                   cache_creation_input_tokens: 9294,
@@ -4154,344 +4435,4 @@ describe("Orchestrator completion timeout (hanging process)", () => {
       warnEntries.some((e) => /hang|completion timeout/i.test(e.message)),
     ).toBe(true);
   }, 10_000);
-});
-
-// ---------------------------------------------------------------------------
-// pi credential provisioning — host auth.json / models-store.json into sandbox
-// ---------------------------------------------------------------------------
-
-describe("pi credential provisioning integration", () => {
-  /**
-   * Test factory that provides a bindMountHandle with copyFileIn/copyFileOut
-   * backed by the filesystem, and intercepts `pi` commands. The mock agent
-   * records whether the sandbox credential files existed when the agent
-   * started, proving provisioning happens before the agent process runs.
-   */
-  const makePiCredentialsFactory = (
-    hostRepoDir: string,
-    mockAgentBehavior: (
-      sandboxRepoDir: string,
-      agentState: { authPresentAtStart: boolean | undefined },
-    ) => Promise<string>,
-  ): {
-    factoryLayer: Layer.Layer<SandboxFactory>;
-    agentState: { authPresentAtStart: boolean | undefined };
-  } => {
-    const sandboxBaseDir = join(tmpdir(), `orch-pi-cred-${randomUUID()}`);
-    const agentState = { authPresentAtStart: undefined as boolean | undefined };
-    let branchCounter = 0;
-
-    const factoryLayer = Layer.succeed(SandboxFactory, {
-      withSandbox: <A, E, R>(
-        makeEffect: (
-          info: import("./SandboxFactory.js").SandboxInfo,
-          sandbox: SandboxService,
-        ) => Effect.Effect<A, E, R>,
-      ): Effect.Effect<
-        import("./SandboxFactory.js").WithSandboxResult<A>,
-        E | DockerError,
-        R
-      > =>
-        Effect.acquireUseRelease(
-          Effect.promise(async () => {
-            await rm(sandboxBaseDir, { recursive: true, force: true });
-            const branchName = `ralph/test-${++branchCounter}`;
-            await execAsync(
-              `git worktree add -b "${branchName}" "${sandboxBaseDir}" HEAD`,
-              { cwd: hostRepoDir },
-            );
-            return branchName;
-          }),
-          (_branchName) => {
-            const handle: BindMountSandboxHandle = {
-              worktreePath: sandboxBaseDir,
-              exec: async (command) => {
-                return new Promise((resolve) => {
-                  exec(command, (err, stdout, stderr) => {
-                    resolve({
-                      stdout: stdout.toString(),
-                      stderr: stderr.toString(),
-                      exitCode:
-                        err && typeof err.code === "number" ? err.code : 0,
-                    });
-                  });
-                });
-              },
-              copyFileIn: async (hostPath, sandboxPath) => {
-                await mkdir(join(sandboxPath, ".."), { recursive: true });
-                await copyFile(hostPath, sandboxPath);
-              },
-              copyFileOut: async () => {},
-              close: async () => {},
-            };
-
-            // Intercept `pi` commands; everything else hits the real fs.
-            const real = makeLocalSandbox(sandboxBaseDir);
-            const sandbox: SandboxService = {
-              exec: (command, options) => {
-                if (command.startsWith("pi ") && options?.onLine) {
-                  const onLine = options.onLine;
-                  return Effect.gen(function* () {
-                    const cwd = options?.cwd ?? sandboxBaseDir;
-                    const output = yield* Effect.promise(() =>
-                      mockAgentBehavior(cwd, agentState),
-                    );
-                    const streamOutput = toPiStreamJson(output);
-                    for (const line of streamOutput.split("\n")) {
-                      onLine(line);
-                    }
-                    return { stdout: streamOutput, stderr: "", exitCode: 0 };
-                  });
-                }
-                return real.exec(command, options);
-              },
-              copyIn: (hostPath, sandboxPath) =>
-                real.copyIn(hostPath, sandboxPath),
-              copyFileOut: (sandboxPath, hostPath) =>
-                real.copyFileOut(sandboxPath, hostPath),
-            };
-
-            return makeEffect(
-              {
-                hostWorktreePath: sandboxBaseDir,
-                sandboxRepoPath: sandboxBaseDir,
-                applyToHost: () => Effect.void,
-                bindMountHandle: handle,
-              },
-              sandbox,
-            ) as Effect.Effect<A, E | DockerError, R>;
-          },
-          (_branchName) =>
-            Effect.promise(async () => {
-              try {
-                await execAsync(
-                  `git worktree remove "${sandboxBaseDir}" --force`,
-                  { cwd: hostRepoDir },
-                ).catch(() => {});
-              } catch {}
-            }),
-        ).pipe(
-          Effect.map((value) => ({ value, preservedWorktreePath: undefined })),
-        ),
-    });
-
-    return { factoryLayer, agentState };
-  };
-
-  it("transfers host pi credentials into the sandbox before the agent starts", async () => {
-    const hostDir = await mkdtemp(join(tmpdir(), "orch-pi-cred-host-"));
-    const hostAgentDir = await mkdtemp(
-      join(tmpdir(), "orch-pi-cred-agentdir-"),
-    );
-    const sandboxAgentDir = join(
-      await mkdtemp(join(tmpdir(), "orch-pi-cred-sbx-")),
-      ".pi",
-      "agent",
-    );
-    try {
-      await initRepo(hostDir);
-      await commitFile(hostDir, "hello.txt", "hello", "initial commit");
-
-      const authContent = JSON.stringify({
-        "openai-codex": { type: "oauth", access: "token-abc" },
-        "zai-coding-cn": { type: "oauth", access: "token-xyz" },
-      });
-      const modelsContent = JSON.stringify({ models: [] });
-      await writeFile(join(hostAgentDir, "auth.json"), authContent);
-      await writeFile(join(hostAgentDir, "models-store.json"), modelsContent);
-
-      const { factoryLayer, agentState } = makePiCredentialsFactory(
-        hostDir,
-        async (_repoDir, state) => {
-          state.authPresentAtStart = existsSync(
-            join(sandboxAgentDir, "auth.json"),
-          );
-          return "Done. <promise>COMPLETE</promise>";
-        },
-      );
-
-      const result = await Effect.runPromise(
-        orchestrate({
-          provider: piFactory("zai-coding-cn/glm-5.3", {
-            credentials: { hostAgentDir, sandboxAgentDir },
-          }),
-          hostRepoDir: hostDir,
-          iterations: 1,
-          prompt: "do some work",
-        }).pipe(Effect.provide(Layer.merge(factoryLayer, testDisplayLayer))),
-      );
-
-      // The agent saw the credentials when it started.
-      expect(agentState.authPresentAtStart).toBe(true);
-      // Both files landed in the sandbox agent dir.
-      expect(await readFile(join(sandboxAgentDir, "auth.json"), "utf-8")).toBe(
-        authContent,
-      );
-      expect(
-        await readFile(join(sandboxAgentDir, "models-store.json"), "utf-8"),
-      ).toBe(modelsContent);
-      // Host copy remains authoritative — unchanged.
-      expect(await readFile(join(hostAgentDir, "auth.json"), "utf-8")).toBe(
-        authContent,
-      );
-      expect(result.completionSignal).toBe("<promise>COMPLETE</promise>");
-    } finally {
-      await rm(hostDir, { recursive: true, force: true });
-      await rm(hostAgentDir, { recursive: true, force: true });
-      await rm(sandboxAgentDir, { recursive: true, force: true });
-    }
-  });
-
-  it("provisions credentials on every iteration (fresh sandbox per iteration)", async () => {
-    const hostDir = await mkdtemp(join(tmpdir(), "orch-pi-cred-multi-"));
-    const hostAgentDir = await mkdtemp(join(tmpdir(), "orch-pi-cred-magent-"));
-    const sandboxAgentDir = join(
-      await mkdtemp(join(tmpdir(), "orch-pi-cred-msbx-")),
-      ".pi",
-      "agent",
-    );
-    try {
-      await initRepo(hostDir);
-      await commitFile(hostDir, "hello.txt", "hello", "initial commit");
-
-      const authContent = JSON.stringify({
-        "zai-coding-cn": { type: "oauth", access: "token-xyz" },
-      });
-      await writeFile(join(hostAgentDir, "auth.json"), authContent);
-
-      let agentStarts = 0;
-      const { factoryLayer } = makePiCredentialsFactory(
-        hostDir,
-        async (_repoDir, state) => {
-          agentStarts++;
-          state.authPresentAtStart = existsSync(
-            join(sandboxAgentDir, "auth.json"),
-          );
-          // No completion signal — force a second iteration.
-          return "iteration done";
-        },
-      );
-
-      await Effect.runPromise(
-        orchestrate({
-          provider: piFactory("zai-coding-cn/glm-5.3", {
-            credentials: { hostAgentDir, sandboxAgentDir },
-          }),
-          hostRepoDir: hostDir,
-          iterations: 2,
-          prompt: "do some work",
-        }).pipe(Effect.provide(Layer.merge(factoryLayer, testDisplayLayer))),
-      );
-
-      expect(agentStarts).toBe(2);
-      expect(existsSync(join(sandboxAgentDir, "auth.json"))).toBe(true);
-    } finally {
-      await rm(hostDir, { recursive: true, force: true });
-      await rm(hostAgentDir, { recursive: true, force: true });
-      await rm(sandboxAgentDir, { recursive: true, force: true });
-    }
-  });
-
-  it("fails with CredentialProvisionError naming the missing host file and never starts the agent", async () => {
-    const hostDir = await mkdtemp(join(tmpdir(), "orch-pi-cred-err-"));
-    const hostAgentDir = await mkdtemp(join(tmpdir(), "orch-pi-cred-errdir-"));
-    const sandboxAgentDir = join(
-      await mkdtemp(join(tmpdir(), "orch-pi-cred-errsbx-")),
-      ".pi",
-      "agent",
-    );
-    try {
-      await initRepo(hostDir);
-      await commitFile(hostDir, "hello.txt", "hello", "initial commit");
-      // No auth.json on the host.
-
-      let agentStarts = 0;
-      const { factoryLayer } = makePiCredentialsFactory(hostDir, async () => {
-        agentStarts++;
-        return "should not run";
-      });
-
-      const exit = await Effect.runPromiseExit(
-        orchestrate({
-          provider: piFactory("openai-codex/gpt-5.6-terra", {
-            credentials: { hostAgentDir, sandboxAgentDir },
-          }),
-          hostRepoDir: hostDir,
-          iterations: 1,
-          prompt: "do some work",
-        }).pipe(Effect.provide(Layer.merge(factoryLayer, testDisplayLayer))),
-      );
-
-      expect(exit._tag).toBe("Failure");
-      if (exit._tag === "Failure") {
-        const error = Cause.squash(exit.cause) as {
-          _tag: string;
-          hostPath?: string;
-          message: string;
-        };
-        expect(error._tag).toBe("CredentialProvisionError");
-        expect(error.hostPath).toBe(join(hostAgentDir, "auth.json"));
-        expect(error.message).toContain(join(hostAgentDir, "auth.json"));
-      }
-      expect(agentStarts).toBe(0);
-    } finally {
-      await rm(hostDir, { recursive: true, force: true });
-      await rm(hostAgentDir, { recursive: true, force: true });
-      await rm(sandboxAgentDir, { recursive: true, force: true });
-    }
-  });
-
-  it("skips provisioning when no bindMountHandle is present (no-sandbox path unchanged)", async () => {
-    const hostDir = await mkdtemp(join(tmpdir(), "orch-pi-cred-nobind-"));
-    const hostAgentDir = await mkdtemp(join(tmpdir(), "orch-pi-cred-nbdir-"));
-    try {
-      await initRepo(hostDir);
-      await commitFile(hostDir, "hello.txt", "hello", "initial commit");
-
-      // Factory WITHOUT bindMountHandle — mirrors the no-sandbox provider.
-      const { factoryLayer } = makeTestSandboxFactory(hostDir, (dir) => {
-        const real = makeLocalSandbox(dir);
-        return {
-          exec: (command, options) => {
-            if (command.startsWith("pi ") && options?.onLine) {
-              const onLine = options.onLine;
-              return Effect.gen(function* () {
-                const output = "Done. <promise>COMPLETE</promise>";
-                const streamOutput = toPiStreamJson(output);
-                for (const line of streamOutput.split("\n")) {
-                  onLine(line);
-                }
-                return { stdout: streamOutput, stderr: "", exitCode: 0 };
-              });
-            }
-            return real.exec(command, options);
-          },
-          copyIn: (hostPath, sandboxPath) => real.copyIn(hostPath, sandboxPath),
-          copyFileOut: (sandboxPath, hostPath) =>
-            real.copyFileOut(sandboxPath, hostPath),
-        };
-      });
-
-      // No auth.json on the host — provisioning would fail if it ran.
-      const result = await Effect.runPromise(
-        orchestrate({
-          provider: piFactory("zai-coding-cn/glm-5.3", {
-            credentials: {
-              hostAgentDir,
-              // Deliberately bogus sandbox dir — never touched.
-              sandboxAgentDir: "/nonexistent/pi-agent-dir",
-            },
-          }),
-          hostRepoDir: hostDir,
-          iterations: 1,
-          prompt: "do some work",
-        }).pipe(Effect.provide(Layer.merge(factoryLayer, testDisplayLayer))),
-      );
-
-      expect(result.completionSignal).toBe("<promise>COMPLETE</promise>");
-    } finally {
-      await rm(hostDir, { recursive: true, force: true });
-      await rm(hostAgentDir, { recursive: true, force: true });
-    }
-  });
 });

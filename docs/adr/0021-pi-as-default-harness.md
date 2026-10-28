@@ -1,71 +1,53 @@
 # Pi is the default agent harness
 
-## Context
-
-This repo is a personal fork of mattpocock/sandcastle, published as
-`@mauricioliu/ralph`. The owner runs agents through the pi coding agent
-(`@earendil-works/pi-coding-agent`) on two OAuth-subscription models:
-`openai-codex/gpt-5.6-terra` (ChatGPT Plus/Pro) for planning, and
-`zai-coding-cn/glm-5.3` (ZAI Coding Plan) for everything else. Upstream
-scaffolds Claude Code as the default, uses `claudeCode(...)` as the placeholder
-factory in every template, and its init rewrite collapses all agent roles to a
-single model. Ten decisions were settled in a grilling session and are recorded
-here as one unit.
+Ralph reconstructs only identity and Pi/credential improvements on the fixed
+Sandcastle upstream base. Init preselects Pi and sandbox images install the
+maintained `@earendil-works/pi-coding-agent`, not the abandoned
+`@mariozechner/pi-coding-agent`. Other agent providers remain selectable.
 
 ## Decision
 
-Pi becomes the fork's default harness, end to end:
+The five self-contained templates own the model policy: the planner uses
+`openai-codex/gpt-6-astra:high`; workers (implementer, reviewer, merger and the
+individual agent) use `zai-coding-cn/glm-5.3:high`. Thinking is inline in the
+model string. Users edit role-specific calls in their scaffolded main file.
+The registry's pair is picker guidance, not a role-aware rewriting engine.
 
-- **Model policy**: the **planner** role defaults to
-  `openai-codex/gpt-5.6-terra:high`; every other **agent role** (implementer,
-  reviewer, merger, and the lone agent in blank/simple-loop) defaults to
-  `zai-coding-cn/glm-5.3:high`. Thinking level rides inline in the model string
-  (`:high`), which pi natively supports.
-- **Templates are the source of truth**: all five scaffold templates ship real
-  `ralph.pi("...:high")` calls instead of the upstream `claudeCode` placeholder.
-  All per-project config happens in the scaffolded `main.ts`; users edit there.
-- **Rewrite skip**: `rewriteMainTs` skips the agent/model rewrite when the
-  selected agent is `pi` and no `--model` was passed, so the two-model split
-  survives verbatim. Any other agent selection (or an explicit `--model`)
-  triggers the rewrite as today, collapsing all roles to one model.
-- **Auth**: pi's subscription models have no API-key env vars. The host's
-  `~/.pi/agent/auth.json` (plus `models-store.json` when a fresh sandbox needs
-  the catalog) is transferred into each sandbox before the agent starts,
-  mirroring the session-transfer mechanism. The host copy stays authoritative.
-- **Init**: the agent picker preselects `pi`, hinting the planner/worker model
-  pair. The pi Dockerfile installs `@earendil-works/pi-coding-agent` (the
-  maintained monorepo package), not the abandoned
-  `@mariozechner/pi-coding-agent`.
-- **Dogfood**: this repo's `.ralph/` runs pi exclusively (Dockerfile, `run.ts`,
-  test scripts).
-- **Public API**: `DEFAULT_MODEL` repoints to `zai-coding-cn/glm-5.3:high` --
-  the worker default is the generic default, since a lone agent is a worker.
-- **README**: defaults-only honesty pass; Claude Code remains documented as one
-  supported agent among several.
+Selecting Pi without `--model` preserves those calls verbatim. An explicit
+`--model`, including the worker default itself, overrides all roles. Selecting
+another agent rewrites imports and calls to that provider and one model: its
+default unless explicitly overridden. Sandbox and filename rewrites always
+run. Existing scaffolds are never silently migrated.
 
-## Considered Options
+The default models use subscriptions: authenticate Pi on the host, not by
+inventing API-key variables in `.env`. Init documents the existing one-way
+credential transfer of `auth.json` and optional `models-store.json`, including
+`PI_CODING_AGENT_DIR` and its `~/.pi/agent` default. The host remains authoritative;
+sandbox refreshes never sync back. No-sandbox runs already use host credentials.
+Issue tracker variables remain separate. Explicit model overrides require the
+chosen model's Pi authentication on the host. Claude Code's OAuth-token guidance
+and Codex's `CODEX_API_KEY` remain unchanged for those selections.
 
-- **Role-aware rewriting** (registry `plannerModel`/`workerModel` + role marker
-  comments in templates) -- rejected: general machinery the fork's single user
-  will never spend, and the defaults would live in registry data instead of
-  visible template code.
-- **Env-var auth only** (`ZAI_CODING_CN_API_KEY` etc. in the scaffold `.env`)
-  -- rejected: `gpt-5.6-terra` is reachable only via subscription OAuth, so
-  env vars cannot serve the planner default in sandboxes.
-- **Dogfood additive** (pi installed alongside Claude in `.ralph/`) --
-  rejected: the dogfood config should exercise the shipped default path; an
-  unused Claude install is image bloat.
-- **`--model` overrides the planner model / drop `--model` for pi** --
-  rejected: all config happens in `main.ts`; `--model` keeps its existing
-  "one model everywhere, explicitly chosen" semantics.
+## Considered options
 
-## Consequences
+- **One model everywhere by default** loses the deliberate planner/worker split.
+- **Role-aware registry rewriting** hides defaults behind extra machinery; visible,
+  independent template calls are simpler (see [ADR 0009](0009-templates-no-shared-code.md)).
+- **Remove `--model` or apply it only to planners** breaks the existing explicit
+  override contract. Absence, not equality to a default string, controls the skip.
+- **API-key-only default setup** cannot represent the approved subscription path.
 
-- Selecting a non-pi agent during init discards the planner/worker split --
-  accepted for a fork whose default path is always pi.
-- OAuth tokens land inside every sandbox -- same trust level as the API keys
-  Ralph already injects via `.env`; a sandbox-side token refresh does not
-  propagate back to the host, which stays authoritative.
-- The template placeholder convention flips from `claudeCode` to `pi`;
-  merging upstream template changes now requires reconciling against
-  pi-first content.
+## Consequences and validation
+
+Alternate agents intentionally collapse the split, while keeping their own
+installers and auth requirements. Credential transfer puts sensitive material
+inside the sandbox; its permission, isolation and cleanup guarantees are
+specified under [Pi sandbox credentials](../../README.md#pi-sandbox-credentials).
+Templates retain upstream workflow behavior, including structured output and
+merge-to-head; this decision does not add custom orchestration or change sessions.
+
+Prompt doubles exercise interactive init without spawning agents or commands.
+Non-interactive installed-package checks compile all templates for Pi defaults,
+explicit overrides and alternate agents, without executing the scaffolds.
+Real subscription availability, OAuth refresh and an authenticated sandbox run
+remain separate manual validations; offline tests do not establish them.

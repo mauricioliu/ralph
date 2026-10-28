@@ -11,6 +11,7 @@ import {
   resolveGitMounts,
   SANDBOX_REPO_DIR,
 } from "./SandboxFactory.js";
+import { patchGitMountsForWindows } from "./mountUtils.js";
 import {
   withSandboxLifecycle,
   runHostHooks,
@@ -40,11 +41,14 @@ import {
 } from "./PromptArgumentSubstitution.js";
 import { noSandbox } from "./sandboxes/no-sandbox.js";
 import { raceAbortSignal } from "./raceAbortSignal.js";
+import { provisionAgentCredentialsEffect } from "./CredentialProvision.js";
+import { prepareInteractiveLaunch } from "./LaunchEnvironment.js";
+import { toCredentialHandle } from "./SandboxProvider.js";
 import { resolveCwd } from "./resolveCwd.js";
 import type { Timeouts } from "./run.js";
 
 export interface InteractiveOptions {
-  /** Agent provider to use (e.g. claudeCode("claude-opus-4-7")) */
+  /** Agent provider to use (e.g. claudeCode("claude-opus-4-8")) */
   readonly agent: AgentProvider;
   /** Sandbox provider (e.g. docker(), noSandbox()). */
   readonly sandbox?: AnySandboxProvider;
@@ -78,7 +82,7 @@ export interface InteractiveOptions {
    *
    * - If `signal.aborted` is already `true` at entry, `interactive()` rejects
    *   immediately without doing any setup work.
-   * - Aborting during an active session kills the agent subprocess.
+   * - Aborting cancels awaiting the session; process teardown is provider-dependent.
    * - The rejected promise surfaces `signal.reason` via
    *   `signal.throwIfAborted()` — no Ralph-specific wrapping.
    * - The worktree is preserved on disk after abort (error-path behavior).
@@ -316,13 +320,21 @@ export const interactive = async (
         return startResult.handle;
       } else {
         const gitPath = join(hostRepoDir, ".git");
-        const gitMounts = yield* resolveGitMounts(gitPath);
+        const rawGitMounts = yield* resolveGitMounts(gitPath);
+        const worktreeOrRepoPath = isHeadMode
+          ? hostRepoDir
+          : worktreeInfo!.path;
+        const gitMounts = yield* patchGitMountsForWindows(
+          rawGitMounts,
+          worktreeOrRepoPath,
+          SANDBOX_REPO_DIR,
+        );
         const startResult = yield* d.taskLog("Starting sandbox", () =>
           startSandbox({
             provider: sandboxProvider,
             hostRepoDir,
             env: effectiveEnv,
-            worktreeOrRepoPath: isHeadMode ? hostRepoDir : worktreeInfo!.path,
+            worktreeOrRepoPath,
             gitMounts,
             repoDir: SANDBOX_REPO_DIR,
           }),
@@ -350,8 +362,15 @@ export const interactive = async (
       }
       const interactiveExecFn = handle.interactiveExec.bind(handle);
 
+      yield* provisionAgentCredentialsEffect({
+        provider,
+        sandboxTag: sandboxProvider.tag,
+        credentialHandle: toCredentialHandle(handle),
+        signal: options.signal,
+      });
+
       // Build sandbox service and run withSandboxLifecycle
-      const sandbox = makeSandboxFromHandle(handle);
+      const sandbox = makeSandboxFromHandle(handle, sandboxProvider.tag);
       const worktreePath = handle.worktreePath;
 
       const applyToHost =
@@ -391,12 +410,19 @@ export const interactive = async (
 
             const result = yield* raceAbortSignal(
               Effect.promise(() =>
-                interactiveExecFn(interactiveArgs, {
-                  stdin: process.stdin,
-                  stdout: process.stdout,
-                  stderr: process.stderr,
-                  cwd: worktreePath,
-                }),
+                interactiveExecFn(
+                  ...prepareInteractiveLaunch(
+                    interactiveArgs,
+                    {
+                      stdin: process.stdin,
+                      stdout: process.stdout,
+                      stderr: process.stderr,
+                      cwd: worktreePath,
+                    },
+                    provider.launchEnv,
+                    sandboxProvider.tag,
+                  ),
+                ),
               ),
               options.signal,
             );

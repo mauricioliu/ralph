@@ -11,6 +11,7 @@ import {
   resolveGitMounts,
   SANDBOX_REPO_DIR,
 } from "./SandboxFactory.js";
+import { patchGitMountsForWindows } from "./mountUtils.js";
 import {
   withSandboxLifecycle,
   runHostHooks,
@@ -29,6 +30,7 @@ import type { CloseResult, Sandbox } from "./createSandbox.js";
 import { createSandboxFromWorktree } from "./createSandbox.js";
 import type { InteractiveResult } from "./interactive.js";
 import {
+  buildAgentStreamHandler,
   buildCompletionMessage,
   buildContextWindowLines,
   buildLogFilename,
@@ -53,6 +55,9 @@ import {
   BUILT_IN_PROMPT_ARG_KEYS,
 } from "./PromptArgumentSubstitution.js";
 import { noSandbox } from "./sandboxes/no-sandbox.js";
+import { provisionAgentCredentialsEffect } from "./CredentialProvision.js";
+import { prepareInteractiveLaunch } from "./LaunchEnvironment.js";
+import { toCredentialHandle } from "./SandboxProvider.js";
 import { raceAbortSignal } from "./raceAbortSignal.js";
 import type { Timeouts } from "./run.js";
 
@@ -84,7 +89,7 @@ export interface CreateWorktreeOptions {
 }
 
 export interface WorktreeInteractiveOptions {
-  /** Agent provider to use (e.g. claudeCode("claude-opus-4-7")) */
+  /** Agent provider to use (e.g. claudeCode("claude-opus-4-8")) */
   readonly agent: AgentProvider;
   /** Sandbox provider (e.g. docker(), noSandbox()). Defaults to noSandbox(). */
   readonly sandbox?: AnySandboxProvider;
@@ -104,7 +109,7 @@ export interface WorktreeInteractiveOptions {
    * An `AbortSignal` that cancels the interactive session when aborted.
    *
    * - If `signal.aborted` is already `true` at entry, rejects immediately.
-   * - Aborting during an active session kills the agent subprocess.
+   * - Aborting cancels awaiting the session; process teardown is provider-dependent.
    * - The worktree is preserved on disk after abort.
    * - The `Worktree` handle remains usable for subsequent operations.
    * - The rejected promise surfaces `signal.reason` via
@@ -114,7 +119,7 @@ export interface WorktreeInteractiveOptions {
 }
 
 export interface WorktreeRunOptions {
-  /** Agent provider to use (e.g. claudeCode("claude-opus-4-7")) */
+  /** Agent provider to use (e.g. claudeCode("claude-opus-4-8")) */
   readonly agent: AgentProvider;
   /** Sandbox provider (e.g. docker()). Required — AFK agents should always be sandboxed. */
   readonly sandbox: SandboxProvider;
@@ -147,7 +152,7 @@ export interface WorktreeRunOptions {
    *
    * - If `signal.aborted` is already `true` at entry, rejects immediately
    *   without doing any setup work.
-   * - Aborting mid-iteration kills the in-flight agent subprocess.
+   * - Aborting mid-iteration cancels awaiting exec; process teardown is provider-dependent.
    * - The worktree is preserved on disk after abort.
    * - The `Worktree` handle remains usable for subsequent operations.
    */
@@ -222,6 +227,12 @@ export const createWorktree = async (
     options.branchStrategy.type === "branch"
       ? options.branchStrategy.baseBranch
       : undefined;
+
+  // Captured for the worktree's run/interactive/createSandbox methods so they
+  // can route the branch correctly into `SandboxLifecycle`: in `merge-to-head`
+  // mode they pass `branch: undefined` (to trigger the merge step) plus
+  // `keepSourceBranch: true` (so the worktree's source branch survives).
+  const isMergeToHead = options.branchStrategy.type === "merge-to-head";
 
   const { hostRepoDir, worktreeInfo } = await Effect.gen(function* () {
     const hostRepoDir = yield* resolveCwd(options.cwd);
@@ -359,7 +370,12 @@ export const createWorktree = async (
         handle = startResult.handle;
       } else {
         const gitPath = join(hostRepoDir, ".git");
-        const gitMounts = yield* resolveGitMounts(gitPath);
+        const rawGitMounts = yield* resolveGitMounts(gitPath);
+        const gitMounts = yield* patchGitMountsForWindows(
+          rawGitMounts,
+          worktreeInfo.path,
+          SANDBOX_REPO_DIR,
+        );
         const startResult = yield* d.taskLog("Starting sandbox", () =>
           startSandbox({
             provider: resolvedSandbox,
@@ -382,7 +398,13 @@ export const createWorktree = async (
           );
         }
         const interactiveExecFn = handle.interactiveExec.bind(handle);
-        const sandbox = makeSandboxFromHandle(handle);
+        yield* provisionAgentCredentialsEffect({
+          provider,
+          sandboxTag: resolvedSandbox.tag,
+          credentialHandle: toCredentialHandle(handle),
+          signal: opts.signal,
+        });
+        const sandbox = makeSandboxFromHandle(handle, resolvedSandbox.tag);
         const worktreePath = handle.worktreePath;
 
         const applyToHost =
@@ -395,10 +417,14 @@ export const createWorktree = async (
             hostRepoDir,
             sandboxRepoDir: worktreePath,
             hooks,
-            branch: worktreeInfo.branch,
+            // merge-to-head: pass `undefined` so the lifecycle records the
+            // host's current branch and merges the worktree's commits back into
+            // it. branch strategy: pin to the worktree's branch.
+            branch: isMergeToHead ? undefined : worktreeInfo.branch,
             hostWorktreePath: worktreeInfo.path,
             applyToHost,
             timeouts: options.timeouts,
+            keepSourceBranch: isMergeToHead,
           },
           sandbox,
           (ctx) =>
@@ -419,12 +445,19 @@ export const createWorktree = async (
 
               const result = yield* raceAbortSignal(
                 Effect.promise(() =>
-                  interactiveExecFn(interactiveArgs, {
-                    stdin: process.stdin,
-                    stdout: process.stdout,
-                    stderr: process.stderr,
-                    cwd: worktreePath,
-                  }),
+                  interactiveExecFn(
+                    ...prepareInteractiveLaunch(
+                      interactiveArgs,
+                      {
+                        stdin: process.stdin,
+                        stdout: process.stdout,
+                        stderr: process.stderr,
+                        cwd: worktreePath,
+                      },
+                      provider.launchEnv,
+                      resolvedSandbox.tag,
+                    ),
+                  ),
                 ),
                 opts.signal,
               );
@@ -559,7 +592,12 @@ export const createWorktree = async (
         sandboxRepoDir = startResult.worktreePath;
       } else {
         const gitPath = join(hostRepoDir, ".git");
-        const gitMounts = yield* resolveGitMounts(gitPath);
+        const rawGitMounts = yield* resolveGitMounts(gitPath);
+        const gitMounts = yield* patchGitMountsForWindows(
+          rawGitMounts,
+          worktreeInfo.path,
+          SANDBOX_REPO_DIR,
+        );
         const startResult = yield* startSandbox({
           provider: sandboxProvider,
           hostRepoDir,
@@ -572,7 +610,7 @@ export const createWorktree = async (
         sandboxRepoDir = startResult.worktreePath;
       }
 
-      const sandbox = makeSandboxFromHandle(handle);
+      const sandbox = makeSandboxFromHandle(handle, sandboxProvider.tag);
       const applyToHost =
         sandboxProvider.tag === "isolated"
           ? () => syncOut(worktreeInfo.path, handle as IsolatedSandboxHandle)
@@ -604,6 +642,14 @@ export const createWorktree = async (
             })()
           : ClackDisplay.layer;
 
+      // Pre-narrow the bind-mount handle for the orchestrator's session-capture
+      // path. Gated on the provider tag so we never hand a NoSandbox/Isolated
+      // handle (which lack copyFileIn/copyFileOut) to AgentSessionStorage.
+      const bindMountHandle =
+        sandboxProvider.tag === "bind-mount"
+          ? (handle as BindMountSandboxHandle)
+          : undefined;
+
       // 6. Build a SandboxFactory that reuses the started sandbox
       const reuseFactoryLayer = Layer.succeed(SandboxFactory, {
         withSandbox: (makeEffect) =>
@@ -612,6 +658,9 @@ export const createWorktree = async (
               hostWorktreePath: worktreeInfo.path,
               sandboxRepoPath: sandboxRepoDir,
               applyToHost,
+              bindMountHandle,
+              sandboxTag: sandboxProvider.tag,
+              credentialHandle: toCredentialHandle(handle),
             },
             sandbox,
           ).pipe(
@@ -623,9 +672,7 @@ export const createWorktree = async (
       });
 
       const streamEmitterLayer = agentStreamEmitterLayer(
-        resolvedLogging.type === "file"
-          ? resolvedLogging.onAgentStreamEvent
-          : undefined,
+        buildAgentStreamHandler(resolvedLogging),
       );
 
       const runLayer = Layer.mergeAll(
@@ -644,7 +691,10 @@ export const createWorktree = async (
           iterations: maxIterations,
           hooks,
           prompt: resolvedPrompt,
-          branch: worktreeInfo.branch,
+          // merge-to-head: pass `undefined` so the lifecycle records the host's
+          // current branch and routes through the merge step. branch strategy:
+          // pin to the worktree's branch so commits stay there.
+          branch: isMergeToHead ? undefined : worktreeInfo.branch,
           provider,
           completionSignal: opts.completionSignal,
           idleTimeoutSeconds: opts.idleTimeoutSeconds,
@@ -654,6 +704,7 @@ export const createWorktree = async (
           signal: opts.signal,
           skipPromptExpansion: isInlinePrompt,
           timeouts: options.timeouts,
+          keepSourceBranch: isMergeToHead,
         });
 
         const completion = buildCompletionMessage(
@@ -712,6 +763,7 @@ export const createWorktree = async (
       hooks: opts.hooks,
       copyToWorktree: opts.copyToWorktree,
       timeouts: opts.timeouts,
+      branchStrategy: options.branchStrategy,
       _test: opts._test,
     });
   };

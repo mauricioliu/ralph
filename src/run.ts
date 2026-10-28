@@ -1,4 +1,5 @@
 import { NodeContext, NodeFileSystem } from "@effect/platform-node";
+import { appendFileSync, mkdirSync } from "node:fs";
 import path, { join } from "node:path";
 import { styleText } from "node:util";
 import { Effect, Layer } from "effect";
@@ -45,7 +46,46 @@ import type {
   OutputObjectDefinition,
   OutputStringDefinition,
 } from "./Output.js";
+import { StructuredOutputError } from "./Output.js";
 import { extractStructuredOutput } from "./extractStructuredOutput.js";
+
+/**
+ * Build the token-efficient feedback prompt sent to the agent when retrying
+ * structured output. The agent has already done the work in the resumed
+ * session — the only ask is to re-emit a corrected tag.
+ *
+ * @internal
+ */
+export const buildStructuredOutputRetryFeedback = (
+  error: StructuredOutputError,
+  retriesRemaining: number,
+): string => {
+  const raw =
+    error.rawMatched === undefined
+      ? "(no matching tag was emitted)"
+      : error.rawMatched;
+  const cause =
+    error.cause === undefined
+      ? "(no parser detail)"
+      : typeof error.cause === "string"
+        ? error.cause
+        : JSON.stringify(error.cause, null, 2);
+
+  return `Your previous response did not produce valid structured output.
+
+Retries remaining after this attempt: ${retriesRemaining}.
+
+Problem:
+${error.message}
+
+Parser detail:
+${cause}
+
+Previous matched output:
+${raw}
+
+Emit only a corrected <${error.tag}> block. Do not change files or run commands.`;
+};
 
 /** Default maximum number of iterations for a run. */
 export const DEFAULT_MAX_ITERATIONS = 1;
@@ -185,15 +225,97 @@ export type LoggingOption =
       readonly type: "file";
       readonly path: string;
       /**
-       * Optional callback invoked for each agent stream event (text chunk or
-       * tool call) in addition to being written to the log file. Intended for
-       * forwarding the agent's output stream to external observability
-       * systems. Errors thrown by the callback are swallowed.
+       * Optional callback invoked for each agent stream event (text chunk,
+       * tool call, or raw stdout line) in addition to being written to the
+       * log file. Intended for forwarding the agent's output stream to
+       * external observability systems. Errors thrown by the callback are
+       * swallowed.
        */
       readonly onAgentStreamEvent?: (event: AgentStreamEvent) => void;
+      /**
+       * When `true`, every raw stdout line the agent emits is appended
+       * verbatim to the same log file at `path`, in real time. Includes
+       * lines the provider's stream parser would otherwise drop (e.g.
+       * tool-use blocks for unrecognised tools). Intended for debugging
+       * stuck or unexpected agent behavior — note that the raw JSON is
+       * interleaved with the human-readable log output. Default: `false`.
+       */
+      readonly verbose?: boolean;
     }
   /** Render progress and agent output as an interactive UI in the terminal (terminal mode). */
-  | { readonly type: "stdout" };
+  | {
+      readonly type: "stdout";
+      /**
+       * When `true`, every raw stdout line the agent emits is written
+       * verbatim to `process.stdout`, in real time. Includes lines the
+       * provider's stream parser would otherwise drop. Intended for
+       * debugging stuck or unexpected agent behavior. Note: the raw output
+       * is interleaved with the interactive terminal UI. Default: `false`.
+       */
+      readonly verbose?: boolean;
+    };
+
+/**
+ * Build the agent-stream event handler for a resolved logging option.
+ *
+ * Composes the user-provided `onAgentStreamEvent` callback (file mode only)
+ * with the verbose raw-line sink: the log file at `path` for file mode, or
+ * `process.stdout` for stdout mode. Returns `undefined` when neither
+ * verbose mode nor a user callback is set.
+ *
+ * Raw lines are written synchronously to honor the `onLine` real-time
+ * contract — the debugger needs each line as soon as the agent emits it.
+ *
+ * @internal
+ */
+export const buildAgentStreamHandler = (
+  logging: LoggingOption,
+): ((event: AgentStreamEvent) => void) | undefined => {
+  const userHandler =
+    logging.type === "file" ? logging.onAgentStreamEvent : undefined;
+  const verboseSink = logging.verbose
+    ? buildVerboseRawLineSink(logging)
+    : undefined;
+  if (!userHandler && !verboseSink) return undefined;
+  return (event) => {
+    if (userHandler) {
+      try {
+        userHandler(event);
+      } catch {
+        // Swallow — a broken forwarder must not stop the verbose sink.
+      }
+    }
+    if (verboseSink && event.type === "raw") {
+      verboseSink(event.line);
+    }
+  };
+};
+
+const buildVerboseRawLineSink = (
+  logging: LoggingOption,
+): ((line: string) => void) => {
+  if (logging.type === "file") {
+    const logPath = logging.path;
+    // Ensure the directory exists; the FileDisplay layer creates it for the
+    // primary log file but it hasn't necessarily run by the time the first
+    // raw line is flushed.
+    try {
+      mkdirSync(path.dirname(logPath), { recursive: true });
+    } catch {
+      // Swallow — appendFileSync below will surface any real I/O error.
+    }
+    return (line) => {
+      try {
+        appendFileSync(logPath, line + "\n");
+      } catch {
+        // Swallow — verbose-mode I/O errors must not kill the run.
+      }
+    };
+  }
+  return (line) => {
+    process.stdout.write(line + "\n");
+  };
+};
 
 /** Override default timeouts for built-in lifecycle steps. Unset keys keep their defaults. */
 export interface Timeouts {
@@ -208,7 +330,7 @@ export interface Timeouts {
 }
 
 export interface RunOptions<A extends AgentProvider = AgentProvider> {
-  /** Agent provider to use (e.g. claudeCode("claude-opus-4-7")) */
+  /** Agent provider to use (e.g. claudeCode("claude-opus-4-8")) */
   readonly agent: A;
   /** Sandbox provider (e.g. docker({ imageName: "ralph:myrepo" })). */
   readonly sandbox: SandboxProvider;
@@ -269,6 +391,7 @@ export interface RunOptions<A extends AgentProvider = AgentProvider> {
    * it. The parent session JSONL is left intact and the agent writes a new
    * session under a fresh id. Exposed as the public `.fork()` method on
    * `RunResult` rather than as a stand-alone caller option — see ADR 0018.
+   * Supported by Claude Code and Codex only; Pi rejects session forks.
    *
    * @internal
    */
@@ -278,7 +401,7 @@ export interface RunOptions<A extends AgentProvider = AgentProvider> {
    *
    * - If `signal.aborted` is already `true` at entry, `run()` rejects
    *   immediately without doing any setup work.
-   * - Aborting mid-iteration kills the in-flight agent subprocess.
+   * - Aborting mid-iteration cancels awaiting exec; process teardown is provider-dependent.
    * - Phase boundaries (between iterations) also check the signal.
    * - The rejected promise surfaces `signal.reason` via
    *   `signal.throwIfAborted()` — no Ralph-specific wrapping.
@@ -343,7 +466,8 @@ export interface RunResult {
    * parent session JSONL is left intact and the child run gets its own
    * session id, enabling fan-out patterns where multiple children diverge
    * from a single parent. Present only when the provider supports resume
-   * (`sessionStorage` populated).
+   * (`sessionStorage` populated). Pi also exposes the generic handle but
+   * rejects forks; only capture and in-place resume are supported for Pi.
    *
    * Sessions only: fork isolates the agent session, not the branch or
    * sandbox. Safe concurrent fan-out (`Promise.all([r.fork(a), r.fork(b)])`)
@@ -431,6 +555,25 @@ export async function run(
     throw new Error(
       "output requires maxIterations to be 1. " +
         "Structured output is only supported for single-iteration runs.",
+    );
+  }
+
+  // Validate: output.maxRetries requires a provider that supports session
+  // resumption. Fail at the earliest possible point — the issue is fully
+  // determined by the inputs to run() and does not depend on the agent's
+  // output. See issue #825.
+  const outputMaxRetries = options.output?.maxRetries ?? 0;
+  if (outputMaxRetries < 0 || !Number.isInteger(outputMaxRetries)) {
+    throw new Error(
+      "output.maxRetries must be a non-negative integer. " +
+        `Received: ${outputMaxRetries}`,
+    );
+  }
+  if (outputMaxRetries > 0 && !provider.sessionStorage) {
+    throw new Error(
+      `output.maxRetries requires an agent provider that supports session resumption. ` +
+        `The "${provider.name}" provider does not. ` +
+        `Use claudeCode, codex, or pi, or set maxRetries to 0.`,
     );
   }
 
@@ -548,9 +691,7 @@ export async function run(
   );
 
   const streamEmitterLayer = agentStreamEmitterLayer(
-    resolvedLogging.type === "file"
-      ? resolvedLogging.onAgentStreamEvent
-      : undefined,
+    buildAgentStreamHandler(resolvedLogging),
   );
 
   const runLayer = Layer.mergeAll(
@@ -706,18 +847,49 @@ export async function run(
     // one that produced this stdout. Carry its session id onto the error so a
     // caller can resume the same session to re-emit corrected output.
     const lastIteration = baseResult.iterations.at(-1);
-    const output = await extractStructuredOutput(
-      baseResult.stdout,
-      options.output,
-      {
-        commits: baseResult.commits,
-        branch: baseResult.branch,
-        preservedWorktreePath: baseResult.preservedWorktreePath,
-        sessionId: lastIteration?.sessionId,
-        sessionFilePath: lastIteration?.sessionFilePath,
-      },
-    );
-    return { ...baseResult, output };
+    try {
+      const output = await extractStructuredOutput(
+        baseResult.stdout,
+        options.output,
+        {
+          commits: baseResult.commits,
+          branch: baseResult.branch,
+          preservedWorktreePath: baseResult.preservedWorktreePath,
+          sessionId: lastIteration?.sessionId,
+          sessionFilePath: lastIteration?.sessionFilePath,
+        },
+      );
+      return { ...baseResult, output };
+    } catch (error) {
+      // Built-in retry: when maxRetries > 0 and the agent emitted a session id
+      // we can resume, recurse with a token-efficient feedback prompt. Each
+      // retry decrements maxRetries so the recursion terminates. See issue
+      // #825.
+      if (
+        error instanceof StructuredOutputError &&
+        outputMaxRetries > 0 &&
+        error.sessionId !== undefined
+      ) {
+        const retriesRemainingAfter = outputMaxRetries - 1;
+        const retryOutput = {
+          ...options.output,
+          maxRetries: retriesRemainingAfter,
+        };
+        return run({
+          ...options,
+          prompt: buildStructuredOutputRetryFeedback(
+            error,
+            retriesRemainingAfter,
+          ),
+          promptFile: undefined,
+          promptArgs: undefined,
+          resumeSession: error.sessionId,
+          forkSession: false,
+          output: retryOutput,
+        } as RunOptions);
+      }
+      throw error;
+    }
   }
 
   return baseResult;

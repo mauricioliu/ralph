@@ -1,16 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
+  claudeSubagentsDirInSandbox,
+  claudeSubagentsDirOnHost,
   encodePiSessionDir,
   encodeProjectPath,
   findClaudeSessionOnHost,
   findCodexSessionOnHost,
   findPiSessionOnHost,
+  listClaudeSubagentSessionsInSandbox,
   locateCodexHostSession,
   locatePiHostSession,
-  piHostAgentDir,
-  piHostAuthPath,
-  piHostModelsStorePath,
-  piSandboxAgentDir,
   piSessionDirPath,
   transferClaudeSession,
   transferCodexSession,
@@ -18,7 +17,8 @@ import {
 } from "./SessionStore.js";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, posix } from "node:path";
+import type { BindMountSandboxHandle } from "./SandboxProvider.js";
 
 // ---------------------------------------------------------------------------
 // encodeProjectPath
@@ -132,6 +132,24 @@ describe("transferClaudeSession", () => {
     const lines = out.split("\n");
     expect(JSON.parse(lines[0]!).cwd).toBe("/host/repo");
     expect(JSON.parse(lines[1]!).cwd).toBe("/other/path");
+  });
+
+  it("preserves a malformed line verbatim instead of aborting the rewrite", () => {
+    // A partially-written final line (torn write during capture) must not
+    // poison the whole transfer — the surrounding good lines are rewritten
+    // as usual, the bad line round-trips byte-for-byte.
+    const torn = '{"type":"system","cwd":"/sandbox/worktree"'; // missing closing brace
+    const jsonl = [
+      JSON.stringify({ type: "a", cwd: "/sandbox/worktree" }),
+      torn,
+      JSON.stringify({ type: "b", cwd: "/sandbox/worktree" }),
+    ].join("\n");
+
+    const out = transferClaudeSession(jsonl, "/sandbox/worktree", "/host/repo");
+    const lines = out.split("\n");
+    expect(JSON.parse(lines[0]!).cwd).toBe("/host/repo");
+    expect(lines[1]).toBe(torn);
+    expect(JSON.parse(lines[2]!).cwd).toBe("/host/repo");
   });
 });
 
@@ -305,35 +323,6 @@ describe("piSessionDirPath", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Pi credential paths (auth.json / models-store.json)
-// ---------------------------------------------------------------------------
-
-describe("pi credential paths", () => {
-  it("piHostAgentDir defaults to ~/.pi/agent and honors an override", () => {
-    expect(piHostAgentDir("/custom/agent-dir")).toBe("/custom/agent-dir");
-    expect(piHostAgentDir()).toBe(
-      join(process.env.HOME ?? "~", ".pi", "agent"),
-    );
-  });
-
-  it("piHostAuthPath and piHostModelsStorePath join the credential filenames onto the agent dir", () => {
-    expect(piHostAuthPath("/custom/agent-dir")).toBe(
-      join("/custom/agent-dir", "auth.json"),
-    );
-    expect(piHostModelsStorePath("/custom/agent-dir")).toBe(
-      join("/custom/agent-dir", "models-store.json"),
-    );
-  });
-
-  it("piSandboxAgentDir defaults to the sandbox home's .pi/agent and honors an override", () => {
-    expect(piSandboxAgentDir()).toBe("/home/agent/.pi/agent");
-    expect(piSandboxAgentDir("/custom/sb-agent-dir")).toBe(
-      "/custom/sb-agent-dir",
-    );
-  });
-});
-
-// ---------------------------------------------------------------------------
 // transferPiSession — header-only cwd rewrite
 // ---------------------------------------------------------------------------
 
@@ -481,5 +470,119 @@ describe("locatePiHostSession", () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Claude subagent / workflow session helpers
+// ---------------------------------------------------------------------------
+
+describe("claudeSubagentsDirInSandbox", () => {
+  it("returns <projectsDir>/<encoded-cwd>/<sessionId>/subagents using POSIX separators", () => {
+    expect(
+      claudeSubagentsDirInSandbox(
+        "/sandbox/repo",
+        "abc-123",
+        "/home/agent/.claude/projects",
+      ),
+    ).toBe("/home/agent/.claude/projects/-sandbox-repo/abc-123/subagents");
+  });
+});
+
+describe("claudeSubagentsDirOnHost", () => {
+  it("returns <projectsDir>/<encoded-cwd>/<sessionId>/subagents using host separators", () => {
+    expect(
+      claudeSubagentsDirOnHost("/host/repo", "abc-123", "/tmp/projects"),
+    ).toBe(join("/tmp/projects", "-host-repo", "abc-123", "subagents"));
+  });
+});
+
+describe("listClaudeSubagentSessionsInSandbox", () => {
+  /** Bind-mount handle backed by the host filesystem (sandbox path == host path). */
+  const fsHandle = (): Pick<BindMountSandboxHandle, "exec"> => ({
+    exec: async (command) => {
+      const { exec } = await import("node:child_process");
+      return new Promise((resolve) => {
+        exec(command, (err, stdout, stderr) => {
+          resolve({
+            stdout: stdout.toString(),
+            stderr: stderr.toString(),
+            exitCode: err && typeof err.code === "number" ? err.code : 0,
+          });
+        });
+      });
+    },
+  });
+
+  it("returns absolute paths of agent-*.jsonl files in the subagents dir", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ralph-sub-list-"));
+    try {
+      const sessionId = "abc-123";
+      const subagentsDir = join(dir, "-sandbox-repo", sessionId, "subagents");
+      await mkdir(subagentsDir, { recursive: true });
+      const f1 = join(subagentsDir, "agent-alpha.jsonl");
+      const f2 = join(subagentsDir, "agent-beta.jsonl");
+      await writeFile(f1, "{}");
+      await writeFile(f2, "{}");
+      // Non-matching files must be filtered out by the find pattern.
+      await writeFile(join(subagentsDir, "summary.txt"), "irrelevant");
+      await writeFile(join(subagentsDir, "agent-gamma.json"), "{}");
+
+      const result = await listClaudeSubagentSessionsInSandbox(
+        "/sandbox/repo",
+        sessionId,
+        fsHandle(),
+        dir,
+      );
+
+      expect(result.sort()).toEqual([f1, f2].sort());
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns [] when the subagents dir does not exist (the normal case)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ralph-sub-nodir-"));
+    try {
+      const result = await listClaudeSubagentSessionsInSandbox(
+        "/sandbox/repo",
+        "abc-123",
+        fsHandle(),
+        dir,
+      );
+      expect(result).toEqual([]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns [] when the subagents dir is empty", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ralph-sub-empty-"));
+    try {
+      const subagentsDir = join(dir, "-sandbox-repo", "abc-123", "subagents");
+      await mkdir(subagentsDir, { recursive: true });
+
+      const result = await listClaudeSubagentSessionsInSandbox(
+        "/sandbox/repo",
+        "abc-123",
+        fsHandle(),
+        dir,
+      );
+      expect(result).toEqual([]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses POSIX path semantics for the sandbox-side enumeration", () => {
+    // Sanity-check: the dir helper used inside the listing must emit POSIX
+    // separators so it works on Windows hosts driving Linux containers.
+    expect(
+      claudeSubagentsDirInSandbox(
+        "/sandbox/repo",
+        "abc-123",
+        "/sandbox/projects",
+      ).includes(posix.sep),
+    ).toBe(true);
   });
 });

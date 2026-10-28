@@ -20,6 +20,14 @@ export class CopyError extends Data.TaggedError("CopyError")<{
   readonly message: string;
 }> {}
 
+/** One-way host credential provisioning failed. Never includes raw provider output. */
+export class CredentialProvisionError extends Data.TaggedError(
+  "CredentialProvisionError",
+)<{
+  readonly message: string;
+  readonly hostPath?: string;
+}> {}
+
 /** Docker infrastructure operation failed */
 export class DockerError extends Data.TaggedError("DockerError")<{
   readonly message: string;
@@ -188,18 +196,6 @@ export class SessionCaptureError extends Data.TaggedError(
   readonly sessionId: string;
 }> {}
 
-/**
- * Transferring agent credentials (auth files, model catalogs) from the host
- * into the sandbox failed. `hostPath` names the missing host credential file
- * when the failure was an absent host file.
- */
-export class CredentialProvisionError extends Data.TaggedError(
-  "CredentialProvisionError",
-)<{
-  readonly message: string;
-  readonly hostPath?: string;
-}> {}
-
 /** The provided `cwd` path does not exist or is not a directory. */
 export { CwdError } from "./resolveCwd.js";
 import type { CwdError } from "./resolveCwd.js";
@@ -210,6 +206,7 @@ export type SandboxError =
   | ExecError
   | ExecHostError
   | CopyError
+  | CredentialProvisionError
   | DockerError
   | PodmanError
   | SyncError
@@ -229,5 +226,4 @@ export type SandboxError =
   | PromptExpansionTimeoutError
   | CommitCollectionTimeoutError
   | MergeToHostTimeoutError
-  | SessionCaptureError
-  | CredentialProvisionError;
+  | SessionCaptureError;

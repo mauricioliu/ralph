@@ -2,8 +2,8 @@
  * No-sandbox provider — runs the agent directly on the host with no container isolation.
  *
  * Usage:
- *   import { noSandbox } from "ralph/sandboxes/no-sandbox";
- *   await interactive({ agent: claudeCode("claude-opus-4-7"), sandbox: noSandbox() });
+ *   import { noSandbox } from "@mauricioliu/ralph/sandboxes/no-sandbox";
+ *   await interactive({ agent: claudeCode("claude-opus-4-8"), sandbox: noSandbox() });
  *
  * Accepted by `run()`, `interactive()`, and `createSandbox()`. Skips
  * container isolation entirely — the agent executes on the host. Does not
@@ -61,20 +61,31 @@ export const noSandbox = (options?: NoSandboxOptions): NoSandboxProvider => ({
           cwd?: string;
           sudo?: boolean;
           stdin?: string;
+          env?: Record<string, string>;
         },
       ): Promise<ExecResult> => {
         // sudo is a no-op for no-sandbox — the user is already on the host
         const cwd = opts?.cwd ?? worktreePath;
+        const isWindows = process.platform === "win32";
+        // PowerShell and cmd.exe don't ship `sh`, so on Windows route the
+        // command string through cmd.exe instead. `/d` skips AutoRun, `/s`
+        // preserves the quoted command verbatim, `/c` runs it and exits.
+        // `windowsVerbatimArguments` keeps Node from re-quoting our args.
+        const shellCmd = isWindows ? "cmd.exe" : "sh";
+        const shellArgs = isWindows
+          ? ["/d", "/s", "/c", command]
+          : ["-c", command];
 
         return new Promise((resolve, reject) => {
-          const proc = spawn("sh", ["-c", command], {
+          const proc = spawn(shellCmd, shellArgs, {
             cwd,
-            env: processEnv,
+            env: { ...processEnv, ...opts?.env },
             stdio: [
               opts?.stdin !== undefined ? "pipe" : "ignore",
               "pipe",
               "pipe",
             ],
+            windowsVerbatimArguments: isWindows,
           });
 
           if (opts?.stdin !== undefined) {
@@ -131,10 +142,14 @@ export const noSandbox = (options?: NoSandboxOptions): NoSandboxProvider => ({
       ): Promise<{ exitCode: number }> => {
         return new Promise((resolve, reject) => {
           const [cmd, ...rest] = args;
+          // Agent CLIs on Windows are typically installed as `.cmd`/`.ps1`
+          // npm wrappers; bare `spawn("claude", …)` only resolves `.exe`
+          // without `shell: true`, so let cmd.exe handle PATHEXT lookup.
           const proc = spawn(cmd!, rest, {
             cwd: opts.cwd ?? worktreePath,
-            env: processEnv,
+            env: { ...processEnv, ...opts.env },
             stdio: [opts.stdin, opts.stdout, opts.stderr] as StdioOptions,
+            shell: process.platform === "win32",
           });
 
           proc.on("error", (error: Error) => {

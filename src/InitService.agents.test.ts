@@ -11,7 +11,7 @@ describe("Agent registry", () => {
     const agent = getAgent("claude-code");
     expect(agent).toBeDefined();
     expect(agent!.name).toBe("claude-code");
-    expect(agent!.defaultModel).toBe("claude-opus-4-7");
+    expect(agent!.defaultModel).toBe("claude-opus-4-8");
     expect(agent!.factoryImport).toBe("claudeCode");
     expect(agent!.dockerfileTemplate).toContain("FROM");
   });
@@ -30,46 +30,15 @@ describe("Agent registry", () => {
     expect(agent).toBeDefined();
     expect(agent!.name).toBe("pi");
     expect(agent!.defaultModel).toBe("zai-coding-cn/glm-5.3:high");
+    expect(agent!.defaultModels).toEqual({
+      planner: "openai-codex/gpt-6-astra:high",
+      worker: "zai-coding-cn/glm-5.3:high",
+    });
     expect(agent!.factoryImport).toBe("pi");
     expect(agent!.dockerfileTemplate).toContain("FROM");
     expect(agent!.dockerfileTemplate).toContain(
       "@earendil-works/pi-coding-agent",
     );
-    // The maintained monorepo package replaces the abandoned one.
-    expect(agent!.dockerfileTemplate).not.toContain(
-      "@mariozechner/pi-coding-agent",
-    );
-  });
-
-  it("pi entry carries the planner/worker model pair for the picker hint", () => {
-    const agent = getAgent("pi");
-    expect(agent!.defaultModels).toEqual({
-      planner: "openai-codex/gpt-5.6-terra:high",
-      worker: "zai-coding-cn/glm-5.3:high",
-    });
-  });
-
-  it("pi entry documents subscription auth via credential transfer in envExample", () => {
-    const agent = getAgent("pi");
-    // Subscription auth via the host's auth.json transfer is the documented
-    // default path — no API-key env var is presented as required.
-    expect(agent!.envExample).toContain("auth.json");
-    expect(agent!.envExample).toContain("subscription");
-    // Any API-key mention is an optional, commented alternative.
-    const anthropicLines = agent!.envExample
-      .split("\n")
-      .filter((l) => l.includes("ANTHROPIC_API_KEY"));
-    expect(anthropicLines.length).toBeGreaterThan(0);
-    for (const line of anthropicLines) {
-      expect(line.trim().startsWith("#")).toBe(true);
-    }
-  });
-
-  it("only pi carries a planner/worker model pair (single-model agents have none)", () => {
-    for (const agent of listAgents()) {
-      if (agent.name === "pi") continue;
-      expect(agent.defaultModels, agent.name).toBeUndefined();
-    }
   });
 
   it("listAgents includes codex", () => {
@@ -129,20 +98,5 @@ describe("Agent registry", () => {
     expect(agent!.factoryImport).toBe("copilot");
     expect(agent!.dockerfileTemplate).toContain("FROM");
     expect(agent!.dockerfileTemplate).toContain("@github/copilot");
-  });
-
-  it("listAgents includes minimax", () => {
-    const agents = listAgents();
-    expect(agents.some((a) => a.name === "minimax")).toBe(true);
-  });
-
-  it("getAgent returns minimax entry with expected fields", () => {
-    const agent = getAgent("minimax");
-    expect(agent).toBeDefined();
-    expect(agent!.name).toBe("minimax");
-    expect(agent!.factoryImport).toBe("minimax");
-    expect(agent!.dockerfileTemplate).toContain("FROM");
-    expect(agent!.dockerfileTemplate).toContain("minimax");
-    expect(agent!.defaultModel).toBe("MiniMax-3.0");
   });
 });

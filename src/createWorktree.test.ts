@@ -1,8 +1,15 @@
 import { exec, execSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { createWorktree } from "./createWorktree.js";
@@ -20,6 +27,7 @@ import {
   type ExecResult,
   type SandboxProvider,
 } from "./SandboxProvider.js";
+import { encodeProjectPath } from "./SessionStore.js";
 import { makeLocalSandbox } from "./testSandbox.js";
 
 const execAsync = promisify(exec);
@@ -339,7 +347,7 @@ describe("worktree.interactive()", () => {
 
     try {
       const result = await ws.interactive({
-        agent: claudeCode("claude-opus-4-7"),
+        agent: claudeCode("claude-opus-4-8"),
         sandbox: provider,
         prompt: "test prompt",
       });
@@ -372,7 +380,7 @@ describe("worktree.interactive()", () => {
 
     try {
       const result = await ws.interactive({
-        agent: claudeCode("claude-opus-4-7"),
+        agent: claudeCode("claude-opus-4-8"),
         sandbox: provider,
         prompt: "fix the bug",
       });
@@ -406,7 +414,7 @@ describe("worktree.interactive()", () => {
 
     try {
       await ws.interactive({
-        agent: claudeCode("claude-opus-4-7"),
+        agent: claudeCode("claude-opus-4-8"),
         sandbox: provider,
         prompt: "add a file",
       });
@@ -447,7 +455,7 @@ describe("worktree.interactive()", () => {
 
       await expect(
         ws.interactive({
-          agent: claudeCode("claude-opus-4-7"),
+          agent: claudeCode("claude-opus-4-8"),
           sandbox: provider,
           prompt: "test prompt",
           signal: ac.signal,
@@ -480,7 +488,7 @@ describe("worktree.interactive()", () => {
       // First call: aborted
       await expect(
         ws.interactive({
-          agent: claudeCode("claude-opus-4-7"),
+          agent: claudeCode("claude-opus-4-8"),
           sandbox: provider,
           prompt: "test",
           signal: ac.signal,
@@ -492,7 +500,7 @@ describe("worktree.interactive()", () => {
 
       // Handle still usable
       const result = await ws.interactive({
-        agent: claudeCode("claude-opus-4-7"),
+        agent: claudeCode("claude-opus-4-8"),
         sandbox: provider,
         prompt: "test again",
       });
@@ -505,7 +513,7 @@ describe("worktree.interactive()", () => {
 
   it("signal option has correct type on WorktreeInteractiveOptions", () => {
     const _options: WorktreeInteractiveOptions = {
-      agent: claudeCode("claude-opus-4-7"),
+      agent: claudeCode("claude-opus-4-8"),
       prompt: "test",
       signal: new AbortController().signal,
     };
@@ -531,7 +539,7 @@ describe("worktree.interactive()", () => {
 
     try {
       const result = await ws.interactive({
-        agent: claudeCode("claude-opus-4-7"),
+        agent: claudeCode("claude-opus-4-8"),
         sandbox: provider,
         prompt: "test",
       });
@@ -660,7 +668,7 @@ describe("worktree.run()", () => {
 
     try {
       const result = await ws.run({
-        agent: claudeCode("claude-opus-4-7"),
+        agent: claudeCode("claude-opus-4-8"),
         sandbox,
         prompt: "do something",
         maxIterations: 1,
@@ -709,6 +717,143 @@ describe("worktree.run()", () => {
     }
   });
 
+  it("captures Claude session and emits 'Context window' from parsed usage (regression: #717)", async () => {
+    const hostDir = await mkdtemp(join(tmpdir(), "ws-run-claude-cap-"));
+    const hostProjectsDir = await mkdtemp(
+      join(tmpdir(), "ws-run-claude-host-projects-"),
+    );
+    const sandboxProjectsDir = await mkdtemp(
+      join(tmpdir(), "ws-run-claude-sb-projects-"),
+    );
+    await initRepo(hostDir);
+    await commitFile(hostDir, "init.txt", "init", "initial commit");
+    const logPath = join(hostDir, "ctxwin.log");
+    const mockSessionId = "wsrun-claude-cap-1";
+
+    // Bind-mount provider whose handle exposes filesystem-backed copyFileIn/
+    // copyFileOut so AgentSessionStorage.captureToHost works. The exec layer
+    // intercepts `claude ...`, writes a fake session JSONL into the sandbox's
+    // projects directory, and streams a stub session_id.
+    const sandbox = createBindMountSandboxProvider({
+      name: "test-claude-cap",
+      create: async (options) => {
+        const handle: BindMountSandboxHandle = {
+          worktreePath: options.worktreePath,
+          exec: async (command, execOptions) => {
+            const cwd = execOptions?.cwd ?? options.worktreePath;
+            if (command.startsWith("claude ")) {
+              const encoded = encodeProjectPath(cwd);
+              const sessionsDir = join(sandboxProjectsDir, encoded);
+              await mkdir(sessionsDir, { recursive: true });
+              await writeFile(
+                join(sessionsDir, `${mockSessionId}.jsonl`),
+                [
+                  JSON.stringify({
+                    type: "system",
+                    subtype: "init",
+                    session_id: mockSessionId,
+                    cwd,
+                  }),
+                  JSON.stringify({
+                    type: "assistant",
+                    message: {
+                      model: "claude-opus-4-8",
+                      usage: {
+                        input_tokens: 50000,
+                        cache_creation_input_tokens: 0,
+                        cache_read_input_tokens: 0,
+                        output_tokens: 100,
+                      },
+                    },
+                    cwd,
+                  }),
+                ].join("\n"),
+              );
+              const streamLines = [
+                JSON.stringify({
+                  type: "system",
+                  subtype: "init",
+                  session_id: mockSessionId,
+                }),
+                JSON.stringify({
+                  type: "assistant",
+                  message: { content: [{ type: "text", text: "ok" }] },
+                }),
+                JSON.stringify({ type: "result", result: "ok" }),
+              ].join("\n");
+              if (execOptions?.onLine) {
+                for (const line of streamLines.split("\n")) {
+                  execOptions.onLine(line);
+                }
+              }
+              return { stdout: streamLines, stderr: "", exitCode: 0 };
+            }
+            try {
+              const result = execSync(command, {
+                cwd,
+                encoding: "utf-8",
+                stdio: ["pipe", "pipe", "pipe"],
+              });
+              return { stdout: result, stderr: "", exitCode: 0 };
+            } catch (e: any) {
+              return {
+                stdout: e?.stdout?.toString() ?? "",
+                stderr: e?.stderr?.toString() ?? "",
+                exitCode:
+                  typeof e?.status === "number" && e.status !== null
+                    ? e.status
+                    : 1,
+              };
+            }
+          },
+          copyFileIn: async (hostPath, sandboxPath) => {
+            await mkdir(dirname(sandboxPath), { recursive: true });
+            await copyFile(hostPath, sandboxPath);
+          },
+          copyFileOut: async (sandboxPath, hostPath) => {
+            await mkdir(dirname(hostPath), { recursive: true });
+            await copyFile(sandboxPath, hostPath);
+          },
+          close: async () => {},
+        };
+        return handle;
+      },
+    });
+
+    const ws = await createWorktree({
+      branchStrategy: { type: "branch", branch: "ctxwin-claude-test" },
+      cwd: hostDir,
+    });
+
+    try {
+      const result = await ws.run({
+        agent: claudeCode("test-model", {
+          sessionStorage: { hostProjectsDir, sandboxProjectsDir },
+        }),
+        sandbox,
+        prompt: "do something",
+        maxIterations: 1,
+        logging: { type: "file", path: logPath },
+      });
+
+      expect(result.iterations[0]!.usage).toEqual({
+        inputTokens: 50000,
+        cacheCreationInputTokens: 0,
+        cacheReadInputTokens: 0,
+        outputTokens: 100,
+      });
+      expect(result.iterations[0]!.sessionFilePath).toBeDefined();
+
+      const log = await readFile(logPath, "utf-8");
+      expect(log).toContain("Context window: 50k");
+    } finally {
+      await ws.close();
+      await rm(hostDir, { recursive: true, force: true });
+      await rm(hostProjectsDir, { recursive: true, force: true });
+      await rm(sandboxProjectsDir, { recursive: true, force: true });
+    }
+  });
+
   it("worktree persists after run completes", async () => {
     const hostDir = await mkdtemp(join(tmpdir(), "ws-run-"));
     await initRepo(hostDir);
@@ -728,7 +873,7 @@ describe("worktree.run()", () => {
 
     try {
       await ws.run({
-        agent: claudeCode("claude-opus-4-7"),
+        agent: claudeCode("claude-opus-4-8"),
         sandbox,
         prompt: "create a file",
         maxIterations: 1,
@@ -767,7 +912,7 @@ describe("worktree.run()", () => {
 
     try {
       const result = await ws.run({
-        agent: claudeCode("claude-opus-4-7"),
+        agent: claudeCode("claude-opus-4-8"),
         sandbox,
         prompt: "create a file",
         maxIterations: 1,
@@ -782,10 +927,116 @@ describe("worktree.run()", () => {
     }
   });
 
+  it("merge-to-head: agent commits advance host's current branch", async () => {
+    const hostDir = await mkdtemp(join(tmpdir(), "ws-run-mth-"));
+    await initRepo(hostDir);
+    await commitFile(hostDir, "init.txt", "init", "initial commit");
+
+    const { stdout: hostHeadBefore } = await execAsync("git rev-parse HEAD", {
+      cwd: hostDir,
+    });
+
+    const sandbox = makeRunTestProvider(async (cwd) => {
+      execSync('echo "agent file" > agent.txt', { cwd });
+      execSync("git add agent.txt", { cwd });
+      execSync('git commit -m "agent commit"', { cwd });
+      return "done";
+    });
+
+    const ws = await createWorktree({
+      branchStrategy: { type: "merge-to-head" },
+      cwd: hostDir,
+    });
+
+    try {
+      const result = await ws.run({
+        agent: claudeCode("claude-opus-4-8"),
+        sandbox,
+        prompt: "create a file",
+        maxIterations: 1,
+      });
+
+      // The result branch is the host's current branch (main), not the temp branch
+      expect(result.branch).toBe("main");
+      expect(result.commits.length).toBeGreaterThanOrEqual(1);
+
+      // Host's main has advanced to include the agent's commit
+      const { stdout: hostHeadAfter } = await execAsync("git rev-parse HEAD", {
+        cwd: hostDir,
+      });
+      expect(hostHeadAfter.trim()).not.toBe(hostHeadBefore.trim());
+
+      // The commit is reachable from main's HEAD
+      const { stdout: log } = await execAsync("git log --format=%s -n 1 HEAD", {
+        cwd: hostDir,
+      });
+      expect(log.trim()).toBe("agent commit");
+
+      // The worktree's source branch must survive so the worktree handle is reusable
+      expect(existsSync(ws.worktreePath)).toBe(true);
+      const { stdout: worktreeBranch } = await execAsync(
+        "git rev-parse --abbrev-ref HEAD",
+        { cwd: ws.worktreePath },
+      );
+      expect(worktreeBranch.trim()).toBe(ws.branch);
+    } finally {
+      await ws.close();
+      await rm(hostDir, { recursive: true, force: true });
+    }
+  });
+
+  it("merge-to-head: two sequential run() calls both land on host", async () => {
+    const hostDir = await mkdtemp(join(tmpdir(), "ws-run-mth-2x-"));
+    await initRepo(hostDir);
+    await commitFile(hostDir, "init.txt", "init", "initial commit");
+
+    let iter = 0;
+    const sandbox = makeRunTestProvider(async (cwd) => {
+      iter += 1;
+      const name = `iter${iter}.txt`;
+      execSync(`echo "iter ${iter}" > ${name}`, { cwd });
+      execSync(`git add ${name}`, { cwd });
+      execSync(`git commit -m "agent commit ${iter}"`, { cwd });
+      return "done";
+    });
+
+    const ws = await createWorktree({
+      branchStrategy: { type: "merge-to-head" },
+      cwd: hostDir,
+    });
+
+    try {
+      await ws.run({
+        agent: claudeCode("claude-opus-4-8"),
+        sandbox,
+        prompt: "first",
+        maxIterations: 1,
+      });
+
+      // Second run() reuses the same worktree handle — the source branch must
+      // still exist on disk for the iteration to find HEAD inside the sandbox.
+      await ws.run({
+        agent: claudeCode("claude-opus-4-8"),
+        sandbox,
+        prompt: "second",
+        maxIterations: 1,
+      });
+
+      const { stdout: log } = await execAsync("git log --format=%s -n 2 HEAD", {
+        cwd: hostDir,
+      });
+      const messages = log.trim().split("\n");
+      expect(messages).toEqual(["agent commit 2", "agent commit 1"]);
+    } finally {
+      await ws.close();
+      await rm(hostDir, { recursive: true, force: true });
+    }
+  });
+
   it("sandbox is required (type error if omitted)", () => {
     // This test validates at the type level — sandbox is required in WorktreeRunOptions
     const _options = {
-      agent: claudeCode("claude-opus-4-7"),
+      agent: claudeCode("claude-opus-4-8"),
       prompt: "test",
       // @ts-expect-error — sandbox is required
     } satisfies WorktreeRunOptions;
@@ -813,7 +1064,7 @@ describe("worktree.run()", () => {
 
       await expect(
         ws.run({
-          agent: claudeCode("claude-opus-4-7"),
+          agent: claudeCode("claude-opus-4-8"),
           sandbox,
           prompt: "do something",
           signal: ac.signal,
@@ -848,7 +1099,7 @@ describe("worktree.run()", () => {
     try {
       await expect(
         ws.run({
-          agent: claudeCode("claude-opus-4-7"),
+          agent: claudeCode("claude-opus-4-8"),
           sandbox,
           prompt: "do something",
           signal: ac.signal,
@@ -882,7 +1133,7 @@ describe("worktree.run()", () => {
       // First call: aborted
       await expect(
         ws.run({
-          agent: claudeCode("claude-opus-4-7"),
+          agent: claudeCode("claude-opus-4-8"),
           sandbox,
           prompt: "do something",
           signal: ac.signal,
@@ -891,7 +1142,7 @@ describe("worktree.run()", () => {
 
       // Second call: should succeed without signal
       const result = await ws.run({
-        agent: claudeCode("claude-opus-4-7"),
+        agent: claudeCode("claude-opus-4-8"),
         sandbox,
         prompt: "do something else",
       });
@@ -906,7 +1157,7 @@ describe("worktree.run()", () => {
 
   it("signal option has the correct type on WorktreeRunOptions", () => {
     const _options: WorktreeRunOptions = {
-      agent: claudeCode("claude-opus-4-7"),
+      agent: claudeCode("claude-opus-4-8"),
       sandbox: testSandbox,
       prompt: "test",
       signal: new AbortController().signal,

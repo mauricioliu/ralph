@@ -6,7 +6,7 @@
  */
 
 import { readdir, stat } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { join, posix, relative } from "node:path";
 import {
   createIsolatedSandboxProvider,
   type ExecResult,
@@ -14,6 +14,9 @@ import {
   type IsolatedSandboxProvider,
 } from "../SandboxProvider.js";
 import { BoundedTail, MAX_TAIL_CHARS } from "../boundedTail.js";
+import { ExecError } from "../errors.js";
+
+const quote = (s: string): string => "'" + s.replace(/'/g, "'\\''") + "'";
 
 import type {
   Daytona as DaytonaClient,
@@ -81,7 +84,7 @@ export const daytona = (options?: DaytonaOptions): IsolatedSandboxProvider =>
   createIsolatedSandboxProvider({
     name: "daytona",
     env: options?.env,
-    create: async (): Promise<IsolatedSandboxHandle> => {
+    create: async (createOptions): Promise<IsolatedSandboxHandle> => {
       const maxOutputTailChars = options?.maxOutputTailChars ?? MAX_TAIL_CHARS;
       const { Daytona } =
         (await import("@daytona/sdk")) as typeof import("@daytona/sdk");
@@ -92,12 +95,41 @@ export const daytona = (options?: DaytonaOptions): IsolatedSandboxProvider =>
       if (options?.target) config.target = options.target;
 
       const client: DaytonaClient = new Daytona(config);
-      const sandbox = await client.create(options?.create as any);
+      const sandbox = await client.create({
+        ...options?.create,
+        envVars: {
+          ...options?.create?.envVars,
+          ...createOptions.env,
+        },
+      });
 
-      const worktreePath =
-        (await sandbox.getWorkDir()) ??
-        (await sandbox.getUserHomeDir()) ??
-        "/home/daytona";
+      // The SDK work dir may be HOME itself. Keep the synced repository in
+      // a child so HOME/.pi credentials never become untracked sync artifacts.
+      let worktreePath: string;
+      try {
+        const base =
+          (await sandbox.getWorkDir()) ??
+          (await sandbox.getUserHomeDir()) ??
+          "/home/daytona";
+        worktreePath = posix.join(base, "ralph-workspace");
+        const result = await sandbox.process.executeCommand(
+          `mkdir -p -- ${quote(worktreePath)} && test -d ${quote(worktreePath)}`,
+          base,
+        );
+        if (result.exitCode !== 0)
+          throw new Error("workspace initialization failed");
+      } catch {
+        let cleaned = true;
+        await client.delete(sandbox).catch(() => {
+          cleaned = false;
+        });
+        throw new ExecError({
+          command: "initialize Daytona worktree",
+          message: cleaned
+            ? "Could not initialize Daytona worktree; sandbox deleted."
+            : "Could not initialize Daytona worktree or delete sandbox; remove it before retrying.",
+        });
+      }
 
       return {
         worktreePath,

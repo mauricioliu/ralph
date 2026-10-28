@@ -1,7 +1,4 @@
 import * as ralph from "@mauricioliu/ralph";
-import { noSandbox } from "@mauricioliu/ralph/sandboxes/no-sandbox";
-
-// /matt-pococks-projects/ralph
 const { commits, branch } = await ralph.interactive({
   branchStrategy: {
     type: "merge-to-head",

@@ -4,26 +4,30 @@ import { tmpdir } from "node:os";
 import {
   claudeHostSessionPath,
   claudeSandboxSessionPath,
+  claudeSubagentsDirOnHost,
   encodePiSessionDir,
   findClaudeSessionOnHost,
   findCodexSessionOnHost,
   findPiSessionOnHost,
+  listClaudeSubagentSessionsInSandbox,
   locateCodexHostSession,
   locateCodexSandboxSession,
   locatePiHostSession,
   locatePiSandboxSession,
-  piHostAgentDir,
-  piHostAuthPath,
-  piHostModelsStorePath,
-  piSandboxAgentDir,
   piSessionDirPath,
   transferClaudeSession,
   transferCodexSession,
   transferPiSession,
   type HostSessionLookup,
 } from "./SessionStore.js";
-import { CredentialProvisionError } from "./errors.js";
-import type { BindMountSandboxHandle } from "./SandboxProvider.js";
+import type {
+  BindMountSandboxHandle,
+  CredentialSandboxHandle,
+} from "./SandboxProvider.js";
+import {
+  makePiCredentialProvisioner,
+  type PiCredentialOptions,
+} from "./PiCredentials.js";
 
 const fileExists = async (path: string): Promise<boolean> => {
   try {
@@ -270,35 +274,27 @@ export interface AgentProvider {
   readonly name: string;
   /** Environment variables injected by this agent provider. Merged at launch time with env resolver and sandbox provider env. */
   readonly env: Record<string, string>;
+  /** Per-launch overrides, also applied to handles created before this agent was selected. */
+  readonly launchEnv?: Record<string, string>;
   /** When true, session capture is enabled for this provider. Default: true for Claude Code, false for others. */
   readonly captureSessions: boolean;
   /** Provider-owned storage and transfer behavior for resumable agent sessions. */
   readonly sessionStorage?: AgentSessionStorage;
-  /**
-   * Transfer provider credentials from the host into the sandbox before the
-   * agent process starts. Only invoked for sandboxed runs that expose a
-   * bind-mount handle — the no-sandbox provider never calls it, since its
-   * credentials already live on the host. The host copy remains authoritative:
-   * this is a one-way host→sandbox copy, and sandbox-side token refreshes never
-   * propagate back. Throws CredentialProvisionError naming the missing host
-   * file when a required credential is absent.
-   */
-  readonly provisionCredentials?: (args: {
-    readonly handle: BindMountSandboxHandle;
-  }) => Promise<void>;
+  /** Opt in to one-way host→sandbox credentials, before each agent launch. */
+  provisionCredentials?(args: {
+    readonly handle: CredentialSandboxHandle;
+    readonly signal?: AbortSignal;
+  }): Promise<void>;
   buildPrintCommand(options: AgentCommandOptions): PrintCommand;
   buildInteractiveArgs?(options: AgentCommandOptions): string[];
+  /** Use only parsed assistant output, never raw stdout, as the run result. */
+  readonly parsedOutputOnly?: boolean;
   parseStreamLine(line: string): ParsedStreamEvent[];
   /** Parse token usage from the captured session JSONL content. Only implemented by Claude Code. */
   parseSessionUsage?(content: string): IterationUsage | undefined;
 }
 
-/**
- * The generic default model — pi's worker model (`zai-coding-cn/glm-5.3:high`),
- * since a lone agent is a worker. The planner role defaults to
- * `openai-codex/gpt-5.6-terra:high` in the scaffold templates (ADR 0021).
- */
-export const DEFAULT_MODEL = "zai-coding-cn/glm-5.3:high";
+export const DEFAULT_MODEL = "claude-opus-4-8";
 
 // ---------------------------------------------------------------------------
 // Session storage helpers — file I/O lives here so callers (Orchestrator,
@@ -343,6 +339,34 @@ const writeSandboxFile = async (
   }
 };
 
+/**
+ * Read a Claude JSONL out of the sandbox, rewrite its `cwd` fields from
+ * `fromCwd` → `toCwd`, and write the result to `destPath` on the host. Used
+ * by `captureToHost` for both the main session file and each subagent /
+ * workflow transcript — the read→rewrite→ensure-dir→write sequence is
+ * identical, only the source/dest paths differ.
+ */
+const copyClaudeSessionFile = async ({
+  handle,
+  sourcePath,
+  fromCwd,
+  toCwd,
+  destPath,
+  tag,
+}: {
+  handle: Pick<BindMountSandboxHandle, "copyFileOut">;
+  sourcePath: string;
+  fromCwd: string;
+  toCwd: string;
+  destPath: string;
+  tag: string;
+}): Promise<void> => {
+  const jsonl = await readSandboxFile(handle, sourcePath, tag);
+  const rewritten = transferClaudeSession(jsonl, fromCwd, toCwd);
+  await mkdir(dirname(destPath), { recursive: true });
+  await writeFile(destPath, rewritten);
+};
+
 const makeClaudeSessionStorage = (
   options?: ClaudeCodeOptions,
 ): AgentSessionStorage => {
@@ -362,20 +386,56 @@ const makeClaudeSessionStorage = (
       return readFile(path, "utf-8");
     },
     captureToHost: async ({ hostCwd, sandboxCwd, sessionId, handle }) => {
-      const sandboxPath = claudeSandboxSessionPath(
+      // Main session: failure is fatal — the user expects their session.
+      await copyClaudeSessionFile({
+        handle,
+        sourcePath: claudeSandboxSessionPath(
+          sandboxCwd,
+          sessionId,
+          sandboxProjectsDir,
+        ),
+        fromCwd: sandboxCwd,
+        toCwd: hostCwd,
+        destPath: claudeHostSessionPath(hostCwd, sessionId, hostProjectsDir),
+        tag: "claude-cap",
+      });
+
+      // Subagent / workflow transcripts: best-effort. A missing `subagents/`
+      // dir is the normal case (no Agent-tool / Workflow usage this run);
+      // an individual subagent failing to copy must not abort siblings or
+      // the (already-successful) main capture.
+      const subagentSandboxPaths = await listClaudeSubagentSessionsInSandbox(
         sandboxCwd,
         sessionId,
+        handle,
         sandboxProjectsDir,
       );
-      const jsonl = await readSandboxFile(handle, sandboxPath, "claude-cap");
-      const rewritten = transferClaudeSession(jsonl, sandboxCwd, hostCwd);
-      const hostPath = claudeHostSessionPath(
+      const hostSubagentsDir = claudeSubagentsDirOnHost(
         hostCwd,
         sessionId,
         hostProjectsDir,
       );
-      await mkdir(dirname(hostPath), { recursive: true });
-      await writeFile(hostPath, rewritten);
+      for (const sandboxSubagentPath of subagentSandboxPaths) {
+        try {
+          await copyClaudeSessionFile({
+            handle,
+            sourcePath: sandboxSubagentPath,
+            fromCwd: sandboxCwd,
+            toCwd: hostCwd,
+            destPath: join(
+              hostSubagentsDir,
+              posix.basename(sandboxSubagentPath),
+            ),
+            tag: "claude-sub",
+          });
+        } catch (err) {
+          console.error(
+            `ralph: failed to capture Claude subagent transcript ${sandboxSubagentPath}: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+        }
+      }
     },
     resumeIntoSandbox: async ({ hostCwd, sandboxCwd, sessionId, handle }) => {
       const hostPath = claudeHostSessionPath(
@@ -501,10 +561,10 @@ const makePiSessionStorage = (options?: PiOptions): AgentSessionStorage => {
   };
 };
 
-// message_end is authoritative; agent_end repeats the final message. An
-// error is provisional until process exit: Pi can retry after agent_end.
-const parsePiAssistant = (msg: any): ParsedStreamEvent[] => {
-  if (msg?.role !== "assistant") return [];
+const parsePiAssistant = (message: unknown): ParsedStreamEvent[] => {
+  if (!message || typeof message !== "object") return [];
+  const msg = message as Record<string, unknown>;
+  if (msg.role !== "assistant") return [];
   if (msg.stopReason === "error" || msg.stopReason === "aborted") {
     return [
       {
@@ -517,13 +577,15 @@ const parsePiAssistant = (msg: any): ParsedStreamEvent[] => {
     ];
   }
   const texts = Array.isArray(msg.content)
-    ? msg.content
-        .filter(
-          (block: any) =>
-            block?.type === "text" && typeof block.text === "string",
-        )
-        .map((block: any) => block.text)
+    ? msg.content.flatMap((block: unknown) => {
+        if (!block || typeof block !== "object") return [];
+        const content = block as Record<string, unknown>;
+        return content.type === "text" && typeof content.text === "string"
+          ? [content.text]
+          : [];
+      })
     : [];
+  // An empty final answer is authoritative too: it revokes earlier text.
   return [{ type: "result", result: texts.join("") }];
 };
 
@@ -538,11 +600,15 @@ const parsePiStreamLine = (line: string): ParsedStreamEvent[] => {
     if (obj.type === "session" && typeof obj.id === "string") {
       return [{ type: "session_id", sessionId: obj.id }];
     }
-    if (obj.type === "message_start" && obj.message?.role === "assistant") {
+    if (
+      (obj.type === "message_start" && obj.message?.role === "assistant") ||
+      obj.type === "auto_retry_start"
+    ) {
       return [{ type: "output_reset" }];
     }
     if (obj.type === "message_end") return parsePiAssistant(obj.message);
     if (obj.type === "message_update" && obj.assistantMessageEvent) {
+      if (obj.message?.role && obj.message.role !== "assistant") return [];
       const evt = obj.assistantMessageEvent as {
         type: string;
         delta?: string;
@@ -563,6 +629,8 @@ const parsePiStreamLine = (line: string): ParsedStreamEvent[] => {
       if (typeof argValue !== "string") return [];
       return [{ type: "tool_call", name: toolName, args: argValue }];
     }
+    // Pi can exit zero even after a terminal provider error. Keep errors
+    // separate from assistant results so they can never signal completion.
     if (obj.type === "agent_error" || obj.type === "error") {
       return [
         {
@@ -573,68 +641,26 @@ const parsePiStreamLine = (line: string): ParsedStreamEvent[] => {
     }
     if (obj.type === "auto_retry_end" && obj.success === false) {
       return [
-        { type: "error", message: obj.finalError || "Pi retries exhausted" },
+        {
+          type: "error",
+          message:
+            typeof obj.finalError === "string" && obj.finalError.trim()
+              ? obj.finalError
+              : "Pi retries exhausted",
+        },
       ];
     }
     if (obj.type === "agent_end" && Array.isArray(obj.messages)) {
       return parsePiAssistant(
-        obj.messages.findLast((msg: any) => msg?.role === "assistant"),
+        obj.messages.findLast(
+          (msg: { role?: unknown } | null) => msg?.role === "assistant",
+        ),
       );
     }
   } catch {
     // Not valid JSON — skip
   }
   return [];
-};
-
-/**
- * Provider-owned credential transfer for the pi agent (ADR 0021).
- *
- * Pi's subscription models (openai-codex via ChatGPT Plus/Pro, zai-coding-cn
- * via ZAI Coding Plan) authenticate through OAuth tokens in
- * `~/.pi/agent/auth.json` — there are no API-key env vars a scaffold `.env`
- * could carry. Before each sandboxed iteration, the host's auth file (plus the
- * `models-store.json` catalog cache, when present) is copied into the
- * sandbox's `~/.pi/agent/`, mirroring the session-transfer mechanism. The copy
- * is one-way: the host file stays authoritative and sandbox-side token
- * refreshes never propagate back.
- */
-const makePiCredentialProvisioner = (
-  options?: PiOptions,
-): ((args: { readonly handle: BindMountSandboxHandle }) => Promise<void>) => {
-  const hostAgentDir = piHostAgentDir(options?.credentials?.hostAgentDir);
-  const sandboxAgentDir = piSandboxAgentDir(
-    options?.credentials?.sandboxAgentDir,
-  );
-
-  return async ({ handle }) => {
-    const hostAuthPath = piHostAuthPath(hostAgentDir);
-    if (!(await fileExists(hostAuthPath))) {
-      throw new CredentialProvisionError({
-        message: `pi auth file not found on host: ${hostAuthPath}. Run 'pi' on the host and authenticate (OAuth) once so Ralph can transfer credentials into the sandbox.`,
-        hostPath: hostAuthPath,
-      });
-    }
-
-    // Create the sandbox agent dir; copyFileIn only lands the file itself.
-    await handle.exec(`mkdir -p ${JSON.stringify(sandboxAgentDir)}`);
-    await handle.copyFileIn(
-      hostAuthPath,
-      posix.join(sandboxAgentDir, "auth.json"),
-    );
-
-    // The model catalog cache is transferred when the host has one — a fresh
-    // sandbox needs it to resolve subscription models like
-    // openai-codex/gpt-5.6-terra / zai-coding-cn/glm-5.3 without a network
-    // catalog fetch. Absent on the host → skip; pi falls back to fetching.
-    const hostModelsStorePath = piHostModelsStorePath(hostAgentDir);
-    if (await fileExists(hostModelsStorePath)) {
-      await handle.copyFileIn(
-        hostModelsStorePath,
-        posix.join(sandboxAgentDir, "models-store.json"),
-      );
-    }
-  };
 };
 
 /** Options for the pi agent provider. */
@@ -645,15 +671,12 @@ export interface PiOptions {
   readonly env?: Record<string, string>;
   /** When false, session capture is disabled. Default: true. */
   readonly captureSessions?: boolean;
+  /** Override Pi credential directories. The sandbox override also sets PI_CODING_AGENT_DIR. */
+  readonly credentials?: PiCredentialOptions;
   /** Override pi session directories for tests or non-standard installs. */
   readonly sessionStorage?: {
     readonly hostSessionsDir?: string;
     readonly sandboxSessionsDir?: string;
-  };
-  /** Override pi credential directories for tests or non-standard installs. */
-  readonly credentials?: {
-    readonly hostAgentDir?: string;
-    readonly sandboxAgentDir?: string;
   };
 }
 
@@ -662,15 +685,41 @@ export const pi = (
   options?: PiOptions,
 ): AgentProvider & { readonly sessionStorage: AgentSessionStorage } => ({
   name: "pi",
-  env: options?.env ?? {},
+  env: {
+    ...options?.env,
+    ...(options?.credentials?.sandboxAgentDir !== undefined
+      ? { PI_CODING_AGENT_DIR: options.credentials.sandboxAgentDir }
+      : {}),
+  },
+  launchEnv:
+    options?.credentials?.sandboxAgentDir !== undefined ||
+    options?.env?.PI_CODING_AGENT_DIR !== undefined
+      ? {
+          PI_CODING_AGENT_DIR:
+            options?.credentials?.sandboxAgentDir ??
+            options?.env?.PI_CODING_AGENT_DIR!,
+        }
+      : undefined,
   captureSessions: options?.captureSessions ?? true,
   sessionStorage: makePiSessionStorage(options),
-  provisionCredentials: makePiCredentialProvisioner(options),
+  provisionCredentials: makePiCredentialProvisioner({
+    ...options?.credentials,
+    sandboxAgentDir:
+      options?.credentials?.sandboxAgentDir ??
+      options?.env?.PI_CODING_AGENT_DIR,
+  }),
+  parsedOutputOnly: true,
 
   buildPrintCommand({
     prompt,
     resumeSession,
+    forkSession,
   }: AgentCommandOptions): PrintCommand {
+    if (forkSession) {
+      throw new Error(
+        "Pi session fork is not supported; use resumeSession to continue the existing session in place.",
+      );
+    }
     const thinkingFlag = options?.thinking
       ? ` --thinking ${options.thinking}`
       : "";
@@ -1178,96 +1227,6 @@ export const copilot = (
 
   parseStreamLine(line: string): ParsedStreamEvent[] {
     return parseCopilotStreamLine(line);
-  },
-});
-
-// ---------------------------------------------------------------------------
-// MiniMax agent provider
-// ---------------------------------------------------------------------------
-
-/** Options for the MiniMax agent provider. */
-export interface MiniMaxOptions {
-  /** Environment variables injected by this agent provider. */
-  readonly env?: Record<string, string>;
-  /** When false, session capture is disabled. Default: false (no session storage yet). */
-  readonly captureSessions?: boolean;
-}
-
-const parseMiniMaxStreamLine = (line: string): ParsedStreamEvent[] => {
-  if (!line.startsWith("{")) return [];
-  try {
-    const obj = JSON.parse(line);
-
-    if (obj.type === "text" && typeof obj.text === "string") {
-      return [{ type: "text", text: obj.text }];
-    }
-    if (obj.type === "result" && typeof obj.result === "string") {
-      return [{ type: "result", result: obj.result }];
-    }
-    if (
-      obj.type === "tool_call" &&
-      typeof obj.name === "string" &&
-      typeof obj.args === "string"
-    ) {
-      return [{ type: "tool_call", name: obj.name, args: obj.args }];
-    }
-    if (obj.type === "session_id" && typeof obj.sessionId === "string") {
-      return [{ type: "session_id", sessionId: obj.sessionId }];
-    }
-    if (obj.type === "usage" && obj.usage) {
-      const u = obj.usage as Record<string, unknown>;
-      const inputTokens = u["inputTokens"];
-      const cacheCreationInputTokens = u["cacheCreationInputTokens"];
-      const cacheReadInputTokens = u["cacheReadInputTokens"];
-      const outputTokens = u["outputTokens"];
-      if (
-        typeof inputTokens === "number" &&
-        typeof cacheCreationInputTokens === "number" &&
-        typeof cacheReadInputTokens === "number" &&
-        typeof outputTokens === "number"
-      ) {
-        return [
-          {
-            type: "usage",
-            usage: {
-              inputTokens,
-              cacheCreationInputTokens,
-              cacheReadInputTokens,
-              outputTokens,
-            },
-          },
-        ];
-      }
-    }
-  } catch {
-    // Not valid JSON — skip
-  }
-  return [];
-};
-
-export const minimax = (
-  model: string,
-  options?: MiniMaxOptions,
-): AgentProvider => ({
-  name: "minimax",
-  env: options?.env ?? {},
-  captureSessions: options?.captureSessions ?? false,
-
-  buildPrintCommand({ prompt }: AgentCommandOptions): PrintCommand {
-    return {
-      command: `minimax -p --model ${shellEscape(model)}`,
-      stdin: prompt,
-    };
-  },
-
-  buildInteractiveArgs({ prompt }: AgentCommandOptions): string[] {
-    const args = ["minimax", "--model", model];
-    if (prompt) args.push(prompt);
-    return args;
-  },
-
-  parseStreamLine(line: string): ParsedStreamEvent[] {
-    return parseMiniMaxStreamLine(line);
   },
 });
 

@@ -1,10 +1,12 @@
-<div align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://res.cloudinary.com/total-typescript/image/upload/v1775033787/readme-ralph-ondark_2x.png">
-    <source media="(prefers-color-scheme: light)" srcset="https://res.cloudinary.com/total-typescript/image/upload/v1775033787/readme-ralph-onlight_2x.png">
-    <img alt="Ralph" src="https://res.cloudinary.com/total-typescript/image/upload/v1775033787/readme-ralph-onlight_2x.png" height="200" style="margin-bottom: 20px;">
-  </picture>
-</div>
+# Ralph
+
+Ralph is a reconstruction of [Sandcastle](https://github.com/mattpocock/sandcastle) by Matt Pocock, based on upstream `0.12.0` at `a53e227250fb51df0ad54155b85fecc1c090c937`. The MIT license and upstream attribution are preserved in [LICENSE](LICENSE); [CHANGELOG.md](CHANGELOG.md), ADRs, research, and sample transcripts retain historical Sandcastle references. The removed upstream documentation site is not restored.
+
+The package is `@mauricioliu/ralph`, the CLI is `ralph`, and per-repository configuration lives in `.ralph/`. Existing Sandcastle consumers must update imports, commands and config paths (including prompts and scripts); there is no automatic migration or legacy `.sandcastle` fallback. The inherited version remains `0.12.0`, not the old fork's `0.8.0`; release versioning and publication remain pending.
+
+For local validation after `npm ci`, run `npm run build`, `npm run typecheck`, `npm test`, and `npm run test:package`. The package smoke check uses a temporary home and offline npm cache, installs a local tarball, checks CLI/public imports, and compiles all five scaffolds in ESM and non-ESM projects for Pi defaults, an explicit Pi model override, and all five alternative agents (70 scaffolds), without executing them. It needs the runtime dependencies and Zod in the npm cache; it never publishes, launches agents or starts sandbox services. Also run `npm run format:check`. See the [final reconstruction audit](docs/rebuild/ticket-16.md) for commit references, coverage, exclusions and checks that still require authorization.
+
+The reconstructed layer is **Ralph identity and Pi/credentials only**. MiniMax, the original fork's authorization allowlist, reviewed branch recovery, coordinator lock, durable issue state/reconciliation and documentation site are excluded. Upstream orchestration and workflow security are retained; historical fork documentation is not current policy. OAuth, live inference, real containers/cloud sandboxes and remote workflows remain unvalidated until separately authorized.
 
 ## What Is Ralph?
 
@@ -33,32 +35,36 @@ Ralph is provider-agnostic — it ships with built-in providers for Docker, Podm
 npm install --save-dev @mauricioliu/ralph
 ```
 
-2. Run `npx @mauricioliu/ralph init`. This scaffolds a `.ralph` directory with all the files needed. The agent picker preselects **pi**, Ralph's default harness.
+2. Run `npx @mauricioliu/ralph init`. This scaffolds a `.ralph` directory with all the files needed. Pi is preselected; Claude Code, Codex, Cursor, OpenCode and Copilot remain available.
 
 ```bash
 npx @mauricioliu/ralph init
 ```
 
-3. No API key is needed on the default path: pi authenticates from your host login, and Ralph transfers the host's `~/.pi/agent/auth.json` into the sandbox for you (see [Credential transfer](#credential-transfer)). Only if you picked an API-key agent during init (e.g. Claude Code), copy the example and fill in its key — to use a Claude subscription instead of an API key, see [#191](https://github.com/mattpocock/sandcastle/issues/191).
+3. For Pi, install `@earendil-works/pi-coding-agent` on the **host**, run `pi`, then `/login` for `openai-codex` and `zai-coding-cn`. The subscription defaults do **not** require API keys in `.ralph/.env`. Ralph transfers the host's `auth.json` and optional `models-store.json` into each sandbox before launch; the host stays authoritative and sandbox refreshes are never copied back. See [Pi sandbox credentials](#pi-sandbox-credentials) for paths, overrides and security limits. Never commit credential files.
+
+   Copy `.ralph/.env.example` to `.ralph/.env` if your issue tracker needs variables (e.g. `GH_TOKEN` for GitHub Issues). If you selected Claude Code instead, set `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` on the host, or uncomment `ANTHROPIC_API_KEY`. Codex uses `CODEX_API_KEY`. Other agents keep their own auth requirements.
 
 ```bash
 cp .ralph/.env.example .ralph/.env
 ```
 
-4. Run the `.ralph/main.ts` (or `main.mts`) file with `npx tsx`
+4. Run the generated entry point:
 
 ```bash
-npx tsx .ralph/main.ts
+npx @mauricioliu/ralph run
 ```
 
+With a global install or `npm link`, use `ralph run`. It runs the unique
+`.ralph/main.ts` or `.ralph/main.mts` in the current project with the included
+TypeScript runtime. Direct execution with `npx tsx .ralph/main.ts` remains supported.
+
 ```typescript
-// 3. Run the agent via the JS API
+// 4. Run the agent via the JS API
 import { run, pi } from "@mauricioliu/ralph";
 import { docker } from "@mauricioliu/ralph/sandboxes/docker";
 
 await run({
-  // pi is the default harness. This is the worker model; the planner
-  // default is openai-codex/gpt-5.6-terra:high.
   agent: pi("zai-coding-cn/glm-5.3:high"),
   sandbox: docker(), // or podman(), vercel(), or your own provider
   promptFile: ".ralph/prompt.md",
@@ -79,7 +85,6 @@ Ralph uses a `SandboxProvider` to create isolated environments. The `sandbox` op
 Worktree methods (`wt.run()`, `wt.interactive()`, `wt.createSandbox()`) accept the same providers as their top-level counterparts. `wt.interactive()` defaults to `noSandbox()` when no sandbox is specified.
 
 ```typescript
-import { pi } from "@mauricioliu/ralph";
 import { docker } from "@mauricioliu/ralph/sandboxes/docker";
 import { podman } from "@mauricioliu/ralph/sandboxes/podman";
 import { vercel } from "@mauricioliu/ralph/sandboxes/vercel";
@@ -87,7 +92,7 @@ import { noSandbox } from "@mauricioliu/ralph/sandboxes/no-sandbox";
 
 // Docker, Podman, and Vercel are interchangeable in run() and createSandbox():
 await run({
-  agent: pi("zai-coding-cn/glm-5.3:high"),
+  agent: claudeCode("claude-opus-4-8"),
   sandbox: docker(),
   prompt: "...",
 });
@@ -95,7 +100,7 @@ await run({
 // No-sandbox runs the agent directly on the host — accepted by run(),
 // createSandbox(), and interactive(). Skips container isolation entirely:
 await interactive({
-  agent: pi("zai-coding-cn/glm-5.3:high"),
+  agent: claudeCode("claude-opus-4-8"),
   sandbox: noSandbox(),
   prompt: "...", // optional — omit to launch the TUI with no initial prompt
   cwd: "/path/to/other-repo", // optional — defaults to process.cwd()
@@ -109,11 +114,11 @@ You can also [create your own provider](#custom-sandbox-providers) using `create
 Ralph exports a programmatic `run()` function for use in scripts, CI pipelines, or custom tooling. The examples below use `docker()`, but any `SandboxProvider` works in its place.
 
 ```typescript
-import { run, pi } from "@mauricioliu/ralph";
+import { run, claudeCode } from "@mauricioliu/ralph";
 import { docker } from "@mauricioliu/ralph/sandboxes/docker";
 
 const result = await run({
-  agent: pi("zai-coding-cn/glm-5.3:high"),
+  agent: claudeCode("claude-opus-4-8"),
   sandbox: docker(),
   promptFile: ".ralph/prompt.md",
 });
@@ -127,13 +132,13 @@ console.log(result.branch); // target branch name
 ### All options
 
 ```typescript
-import { run, pi } from "@mauricioliu/ralph";
+import { run, claudeCode } from "@mauricioliu/ralph";
 import { docker } from "@mauricioliu/ralph/sandboxes/docker";
 
 const result = await run({
-  // Agent provider — required. Pass a model string to pi().
-  // Optional second arg for provider-specific options like thinking level.
-  agent: pi("zai-coding-cn/glm-5.3:high"),
+  // Agent provider — required. Pass a model string to claudeCode().
+  // Optional second arg for provider-specific options like effort level.
+  agent: claudeCode("claude-opus-4-8", { effort: "high" }),
 
   // Sandbox provider — required. Any SandboxProvider works (docker, podman, vercel, or custom).
   // Provider-specific config (like imageName, mounts) lives inside the provider factory call.
@@ -221,14 +226,20 @@ const result = await run({
     type: "file",
     path: ".ralph/logs/my-run.log",
     // Optional: forward the agent's output stream to your own observability system.
-    // Fires for each text chunk and tool call the agent produces. Errors thrown
-    // by the callback are swallowed so a broken forwarder cannot kill the run.
+    // Fires for each text chunk, tool call, and raw stdout line the agent
+    // produces. Errors thrown by the callback are swallowed so a broken
+    // forwarder cannot kill the run.
     onAgentStreamEvent: (event) => {
-      // event is { type: "text" | "toolCall", iteration, timestamp, ... }
+      // event is { type: "text" | "toolCall" | "raw", iteration, timestamp, ... }
       myLogger.info(event);
     },
+    // Optional: append every raw stdout line the agent emits to the same
+    // log file, interleaved with the human-readable output. Includes lines
+    // the provider's stream parser would otherwise drop. Intended for
+    // debugging stuck or unexpected agent behaviour.
+    verbose: true,
   },
-  // logging: { type: "stdout" }, // OR render an interactive UI in the terminal
+  // logging: { type: "stdout", verbose: true }, // OR terminal mode (verbose: raw lines to stdout)
 
   // String (or array of strings) the agent emits to end the iteration loop early.
   // Default: "<promise>COMPLETE</promise>"
@@ -264,7 +275,7 @@ Use `run()` instead when you only need a single one-shot invocation — it handl
 #### Basic single-run usage
 
 ```typescript
-import { createSandbox, pi } from "@mauricioliu/ralph";
+import { createSandbox, claudeCode } from "@mauricioliu/ralph";
 import { docker } from "@mauricioliu/ralph/sandboxes/docker";
 
 await using sandbox = await createSandbox({
@@ -273,7 +284,7 @@ await using sandbox = await createSandbox({
 });
 
 const result = await sandbox.run({
-  agent: pi("zai-coding-cn/glm-5.3:high"),
+  agent: claudeCode("claude-opus-4-8"),
   prompt: "Fix issue #42 in this repo.",
 });
 
@@ -283,7 +294,7 @@ console.log(result.commits); // [{ sha: "abc123" }]
 #### Multi-run implement-then-review
 
 ```typescript
-import { createSandbox, pi } from "@mauricioliu/ralph";
+import { createSandbox, claudeCode } from "@mauricioliu/ralph";
 import { docker } from "@mauricioliu/ralph/sandboxes/docker";
 
 await using sandbox = await createSandbox({
@@ -294,20 +305,48 @@ await using sandbox = await createSandbox({
 
 // Step 1: implement
 const implResult = await sandbox.run({
-  agent: pi("zai-coding-cn/glm-5.3:high"),
+  agent: claudeCode("claude-opus-4-8"),
   promptFile: ".ralph/implement.md",
   maxIterations: 5,
 });
 
-// Step 2: review on the same branch, same container — the reviewer role
-// also runs the worker model; pass any model string to change it
+// Step 2: review on the same branch, same container
 const reviewResult = await sandbox.run({
-  agent: pi("zai-coding-cn/glm-5.3:high"),
+  agent: claudeCode("claude-sonnet-4-6"),
   prompt: "Review the changes and fix any issues.",
 });
 ```
 
 Commits from all `run()` calls accumulate on the same branch. The sandbox container stays alive between runs, so installed dependencies and build artifacts persist.
+
+`sandbox.exec()` lets the harness run shell commands directly in the same warm sandbox — handy for gating an implement step on a quick verification before kicking off the review:
+
+```typescript
+await using sandbox = await createSandbox({
+  branch: "agent/fix-42",
+  sandbox: docker(),
+  hooks: { sandbox: { onSandboxReady: [{ command: "npm install" }] } },
+});
+
+await sandbox.run({
+  agent: claudeCode("claude-opus-4-8"),
+  promptFile: ".ralph/implement.md",
+  maxIterations: 5,
+});
+
+// Verify before review — non-zero exitCode is returned, not thrown.
+const tests = await sandbox.exec("npm test");
+if (tests.exitCode !== 0) {
+  throw new Error(`Tests failed:\n${tests.stdout}\n${tests.stderr}`);
+}
+
+await sandbox.run({
+  agent: claudeCode("claude-sonnet-4-6"),
+  prompt: "Review the changes and fix any issues.",
+});
+```
+
+`cwd` defaults to the sandbox repo path, matching `interactive()`. Pass `cwd` to override.
 
 #### Automatic cleanup with `await using`
 
@@ -340,40 +379,44 @@ if (closeResult.preservedWorktreePath) {
 
 #### `Sandbox`
 
-| Property / Method       | Type                                                               | Description                                  |
-| ----------------------- | ------------------------------------------------------------------ | -------------------------------------------- |
-| `branch`                | string                                                             | The branch the sandbox is on                 |
-| `worktreePath`          | string                                                             | Host path to the worktree                    |
-| `run(options)`          | `(SandboxRunOptions) => Promise<SandboxRunResult>`                 | Invoke an agent inside the existing sandbox  |
-| `interactive(options)`  | `(SandboxInteractiveOptions) => Promise<SandboxInteractiveResult>` | Launch an interactive session in the sandbox |
-| `close()`               | `() => Promise<CloseResult>`                                       | Tear down the container and sandbox          |
-| `[Symbol.asyncDispose]` | `() => Promise<void>`                                              | Auto teardown via `await using`              |
+| Property / Method       | Type                                                                     | Description                                                                                                               |
+| ----------------------- | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| `branch`                | string                                                                   | The branch the sandbox is on                                                                                              |
+| `worktreePath`          | string                                                                   | Host path to the worktree                                                                                                 |
+| `run(options)`          | `(SandboxRunOptions) => Promise<SandboxRunResult>`                       | Invoke an agent inside the existing sandbox                                                                               |
+| `interactive(options)`  | `(SandboxInteractiveOptions) => Promise<SandboxInteractiveResult>`       | Launch an interactive session in the sandbox                                                                              |
+| `exec(cmd, options?)`   | `(command: string, options?: SandboxExecOptions) => Promise<ExecResult>` | Run a shell command in the sandbox. `cwd` defaults to the sandbox repo path. Non-zero `exitCode` is returned, not thrown. |
+| `close()`               | `() => Promise<CloseResult>`                                             | Tear down the container and sandbox                                                                                       |
+| `[Symbol.asyncDispose]` | `() => Promise<void>`                                                    | Auto teardown via `await using`                                                                                           |
 
 #### `SandboxRunOptions`
 
-| Option                     | Type               | Default                       | Description                                                                          |
-| -------------------------- | ------------------ | ----------------------------- | ------------------------------------------------------------------------------------ |
-| `agent`                    | AgentProvider      | —                             | **Required.** Agent provider (e.g. `pi("zai-coding-cn/glm-5.3:high")`)               |
-| `prompt`                   | string             | —                             | Inline prompt (mutually exclusive with `promptFile`)                                 |
-| `promptFile`               | string             | —                             | Path to prompt file (mutually exclusive with `prompt`)                               |
-| `promptArgs`               | PromptArgs         | —                             | Key-value map for `{{KEY}}` placeholder substitution                                 |
-| `maxIterations`            | number             | `1`                           | Maximum iterations to run                                                            |
-| `completionSignal`         | string \| string[] | `<promise>COMPLETE</promise>` | String(s) the agent emits to stop the iteration loop early                           |
-| `idleTimeoutSeconds`       | number             | `600`                         | Idle timeout in seconds — resets on each agent output event                          |
-| `completionTimeoutSeconds` | number             | `60`                          | Grace window after the completion signal is seen but the agent process hasn't exited |
-| `name`                     | string             | —                             | Display name for the run                                                             |
-| `logging`                  | object             | file (auto-generated)         | `{ type: 'file', path }` or `{ type: 'stdout' }`                                     |
-| `signal`                   | AbortSignal        | —                             | Cancels the run when aborted; handle stays usable afterward                          |
+| Option                     | Type               | Default                       | Description                                                                                                                          |
+| -------------------------- | ------------------ | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `agent`                    | AgentProvider      | —                             | **Required.** Agent provider (e.g. `claudeCode("claude-opus-4-8")`)                                                                  |
+| `prompt`                   | string             | —                             | Inline prompt (mutually exclusive with `promptFile`)                                                                                 |
+| `promptFile`               | string             | —                             | Path to prompt file (mutually exclusive with `prompt`)                                                                               |
+| `promptArgs`               | PromptArgs         | —                             | Key-value map for `{{KEY}}` placeholder substitution                                                                                 |
+| `maxIterations`            | number             | `1`                           | Maximum iterations to run                                                                                                            |
+| `completionSignal`         | string \| string[] | `<promise>COMPLETE</promise>` | String(s) the agent emits to stop the iteration loop early                                                                           |
+| `idleTimeoutSeconds`       | number             | `600`                         | Idle timeout in seconds — resets on each agent output event                                                                          |
+| `completionTimeoutSeconds` | number             | `60`                          | Grace window after the completion signal is seen but the agent process hasn't exited                                                 |
+| `name`                     | string             | —                             | Display name for the run                                                                                                             |
+| `logging`                  | object             | file (auto-generated)         | `{ type: 'file', path }` or `{ type: 'stdout' }`                                                                                     |
+| `resumeSession`            | string             | —                             | Resume a prior session by ID for agents that support resume. Incompatible with `maxIterations > 1`. Session file must exist on host. |
+| `signal`                   | AbortSignal        | —                             | Cancels the run when aborted; handle stays usable afterward                                                                          |
 
 #### `SandboxRunResult`
 
-| Field              | Type                | Description                                                        |
-| ------------------ | ------------------- | ------------------------------------------------------------------ |
-| `iterations`       | `IterationResult[]` | Per-iteration results (use `.length` for the count)                |
-| `completionSignal` | string?             | The matched completion signal string, or `undefined` if none fired |
-| `stdout`           | string              | Combined agent output from all iterations                          |
-| `commits`          | `{ sha }[]`         | Commits created during the run                                     |
-| `logFilePath`      | string?             | Path to the log file (only when logging to a file)                 |
+| Field                      | Type                                                                                     | Description                                                                                                                         |
+| -------------------------- | ---------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `iterations`               | `IterationResult[]`                                                                      | Per-iteration results (use `.length` for the count)                                                                                 |
+| `completionSignal`         | string?                                                                                  | The matched completion signal string, or `undefined` if none fired                                                                  |
+| `stdout`                   | string                                                                                   | Combined agent output from all iterations                                                                                           |
+| `commits`                  | `{ sha }[]`                                                                              | Commits created during the run                                                                                                      |
+| `logFilePath`              | string?                                                                                  | Path to the log file (only when logging to a file)                                                                                  |
+| `resume(prompt, options?)` | `(prompt: string, options?: ResumeSandboxRunResultOptions) => Promise<SandboxRunResult>` | Continue the captured session for one iteration inside the same warm sandbox. Present only when the provider captured a session id. |
+| `fork(prompt, options?)`   | `(prompt: string, options?: ResumeSandboxRunResultOptions) => Promise<SandboxRunResult>` | Fork the captured Claude Code/Codex session inside the same warm sandbox (ADR 0018). Pi rejects forks; use `resume()`.              |
 
 #### `CloseResult`
 
@@ -403,13 +446,13 @@ console.log(wt.branch); // "agent/fix-42"
 
 // Run an interactive session in the worktree (defaults to noSandbox)
 await wt.interactive({
-  agent: pi("zai-coding-cn/glm-5.3:high"),
+  agent: claudeCode("claude-opus-4-8"),
   prompt: "Explore the codebase and understand the bug.",
 });
 
 // Run an AFK agent in the worktree (sandbox is required)
 const result = await wt.run({
-  agent: pi("zai-coding-cn/glm-5.3:high"),
+  agent: claudeCode("claude-opus-4-8"),
   sandbox: docker({ imageName: "ralph:myrepo" }),
   prompt: "Fix issue #42.",
   maxIterations: 3,
@@ -431,6 +474,8 @@ await sandbox.close();
 ```
 
 `wt.close()` checks for uncommitted changes: if the worktree is dirty, it's preserved on disk; if clean, it's removed. `await using` calls `close()` automatically. The worktree persists after `run()`, `interactive()`, and `createSandbox()` complete, so you can hand it to another agent or inspect it.
+
+With `branchStrategy: { type: "merge-to-head" }`, each `wt.run()` / `wt.interactive()` merges the agent's commits back to the host's current branch before returning, and the worktree's source branch is preserved across calls so subsequent ones can reuse the same handle. (This differs from top-level `run()`, where the temp branch is deleted after the merge.)
 
 **Split ownership**: When a sandbox is created via `wt.createSandbox()`, `sandbox.close()` tears down the container only — the worktree remains. `wt.close()` is responsible for worktree cleanup. This differs from the top-level `createSandbox()`, where `sandbox.close()` owns both container and worktree.
 
@@ -470,23 +515,23 @@ await sandbox.close();
 
 #### `WorktreeRunOptions`
 
-| Option                     | Type                   | Default | Description                                                                                                                          |
-| -------------------------- | ---------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `agent`                    | AgentProvider          | —       | **Required.** Agent provider                                                                                                         |
-| `sandbox`                  | SandboxProvider        | —       | **Required.** Sandbox provider (AFK agents must be sandboxed)                                                                        |
-| `prompt`                   | string                 | —       | Inline prompt (mutually exclusive with `promptFile`)                                                                                 |
-| `promptFile`               | string                 | —       | Path to prompt file                                                                                                                  |
-| `maxIterations`            | number                 | 1       | Maximum iterations to run                                                                                                            |
-| `completionSignal`         | string \| string[]     | —       | Substring(s) to stop the iteration loop early                                                                                        |
-| `idleTimeoutSeconds`       | number                 | 600     | Idle timeout in seconds                                                                                                              |
-| `completionTimeoutSeconds` | number                 | 60      | Grace window after completion signal is seen but agent process hasn't exited                                                         |
-| `name`                     | string                 | —       | Optional run name                                                                                                                    |
-| `logging`                  | LoggingOption          | file    | Logging mode                                                                                                                         |
-| `hooks`                    | SandboxHooks           | —       | Lifecycle hooks (`host.*`, `sandbox.*`)                                                                                              |
-| `promptArgs`               | PromptArgs             | —       | Key-value map for `{{KEY}}` placeholder substitution                                                                                 |
-| `env`                      | Record<string, string> | —       | Environment variables to inject into the sandbox                                                                                     |
-| `resumeSession`            | string                 | —       | Resume a prior session by ID for agents that support resume. Incompatible with `maxIterations > 1`. Session file must exist on host. |
-| `signal`                   | AbortSignal            | —       | Cancel the run when aborted. Kills the in-flight agent subprocess; the worktree is preserved on disk. Rejects with `signal.reason`.  |
+| Option                     | Type                   | Default | Description                                                                                                                                    |
+| -------------------------- | ---------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agent`                    | AgentProvider          | —       | **Required.** Agent provider                                                                                                                   |
+| `sandbox`                  | SandboxProvider        | —       | **Required.** Sandbox provider (AFK agents must be sandboxed)                                                                                  |
+| `prompt`                   | string                 | —       | Inline prompt (mutually exclusive with `promptFile`)                                                                                           |
+| `promptFile`               | string                 | —       | Path to prompt file                                                                                                                            |
+| `maxIterations`            | number                 | 1       | Maximum iterations to run                                                                                                                      |
+| `completionSignal`         | string \| string[]     | —       | Substring(s) to stop the iteration loop early                                                                                                  |
+| `idleTimeoutSeconds`       | number                 | 600     | Idle timeout in seconds                                                                                                                        |
+| `completionTimeoutSeconds` | number                 | 60      | Grace window after completion signal is seen but agent process hasn't exited                                                                   |
+| `name`                     | string                 | —       | Optional run name                                                                                                                              |
+| `logging`                  | LoggingOption          | file    | Logging mode                                                                                                                                   |
+| `hooks`                    | SandboxHooks           | —       | Lifecycle hooks (`host.*`, `sandbox.*`)                                                                                                        |
+| `promptArgs`               | PromptArgs             | —       | Key-value map for `{{KEY}}` placeholder substitution                                                                                           |
+| `env`                      | Record<string, string> | —       | Environment variables to inject into the sandbox                                                                                               |
+| `resumeSession`            | string                 | —       | Resume a prior session by ID for agents that support resume. Incompatible with `maxIterations > 1`. Session file must exist on host.           |
+| `signal`                   | AbortSignal            | —       | Cancel awaiting the run when aborted; the worktree is preserved on disk. Rejects with `signal.reason`. Process teardown is provider-dependent. |
 
 #### `WorktreeRunResult`
 
@@ -510,7 +555,7 @@ await sandbox.close();
 
 ## How it works
 
-Ralph uses a **branch strategy** configured on the sandbox provider to control how the agent's changes relate to branches. There are three strategies:
+Ralph uses a **branch strategy** passed to `run()` / `interactive()` (or `createWorktree()`) to control how the agent's changes relate to branches. There are three strategies:
 
 - **Head** (`{ type: "head" }`) — The agent writes directly to the host working directory. No worktree, no branch indirection. This is the default for bind-mount providers like `docker()`.
 - **Merge-to-head** (`{ type: "merge-to-head" }`) — Ralph creates a temporary branch in a git worktree. The agent works on the temp branch, and changes are merged back to HEAD when done. The temp branch is cleaned up after merge.
@@ -626,7 +671,7 @@ await run({
 
 Tell the agent to output your chosen string(s) in the prompt, and the orchestrator will stop when it detects any of them. The matched signal is returned as `result.completionSignal`.
 
-Completion and structured output use only provider-parsed assistant text/results, never raw stdout (which can contain prompts and tool output). Pi `error`/`aborted` assistant messages fail the invocation even when the process exits zero; an error revokes any previously streamed completion marker. Pi's internal retry can still recover before process exit. On exhausted retries, the error propagates to the caller rather than starting another Ralph iteration.
+For Pi, completion and structured output come only from parsed assistant text, never user messages, tool output, or raw stdout. Assistant `error`/`aborted` stop reasons, `agent_error`/`error`, and exhausted automatic retries fail the run even if Pi exits with code zero. An observed error, new assistant message, or retry start revokes an earlier completion signal and its completion timer. A restarted attempt can recover only with a successful final assistant message; streamed text alone does not clear an error. The latest assistant result replaces earlier text, including when empty. Raw events still reach logging/stream callbacks.
 
 #### Hanging processes after the completion signal
 
@@ -645,6 +690,8 @@ await run({
 });
 ```
 
+Timeout/cancellation tests establish API outcomes, not process termination. Abandoning an exec on a warm handle or no-sandbox provider does not guarantee that its process/children stopped; close a real sandbox and verify runtime teardown separately. See [ADR 0019](docs/adr/0019-completion-timeout-for-hanging-process.md). No process-kill hardening is added by this reconstruction.
+
 This is independent of `idleTimeoutSeconds`. They cover different phases: `idleTimeoutSeconds` runs **before** any signal is seen (genuinely stuck agent → fail); `completionTimeoutSeconds` runs **after** the signal is seen (hanging process → succeed with warning). See [ADR 0019](docs/adr/0019-completion-timeout-for-hanging-process.md).
 
 ### Structured output
@@ -652,12 +699,12 @@ This is independent of `idleTimeoutSeconds`. They cover different phases: `idleT
 Use `Output.object()` to extract a typed, schema-validated JSON payload from the agent's stdout. The agent emits its answer inside an XML tag you specify, and Ralph parses, validates, and returns it on `result.output`. The schema can be any [Standard Schema](https://standardschema.dev) validator — the examples below use [Zod](https://zod.dev), but Valibot, ArkType, and others work identically. See [ADR 0010](docs/adr/0010-structured-output.md) for design rationale.
 
 ```ts
-import { run, Output, pi } from "@mauricioliu/ralph";
+import { run, Output, claudeCode } from "@mauricioliu/ralph";
 import { docker } from "@mauricioliu/ralph/sandboxes/docker";
 import { z } from "zod";
 
 const result = await run({
-  agent: pi("zai-coding-cn/glm-5.3:high"),
+  agent: claudeCode("claude-opus-4-8"),
   sandbox: docker(),
   prompt: `Analyze the code, and output the result as JSON inside <result> tags.
     The result must match this schema:
@@ -675,7 +722,24 @@ console.log(result.output.score); // typed as number
 
 `Output.string({ tag })` extracts the tag contents as a plain string (trimmed, no JSON parsing). Both helpers require `maxIterations` to be `1` (the default). The resolved prompt must contain the configured opening tag literal.
 
-When extraction or validation fails, `run()` throws a `StructuredOutputError`. Alongside `tag`, `rawMatched`, `cause`, `commits`, `branch`, and `preservedWorktreePath`, the error carries the `sessionId` (and `sessionFilePath`, when the session was captured) of the run that produced the bad output. You can resume that session to ask the agent to re-emit corrected output, without repeating the work:
+When extraction or validation fails, `run()` throws a `StructuredOutputError`. Alongside `tag`, `rawMatched`, `cause`, `commits`, `branch`, and `preservedWorktreePath`, the error carries the `sessionId` (and `sessionFilePath`, when the session was captured) of the run that produced the bad output.
+
+Pass `maxRetries` to have Ralph handle the retry loop for you. Each retry resumes the same agent session and feeds back a token-efficient description of the error, so the agent can re-emit a corrected tag without redoing the work. Retries require an agent provider that supports session resumption (`claudeCode`, `codex`, `pi`) — calling `run()` with `maxRetries > 0` against a non-resumable provider (`cursor`, `opencode`, `copilot`) throws immediately.
+
+```ts
+const result = await run({
+  agent: claudeCode("claude-opus-4-8"),
+  sandbox: docker(),
+  prompt: "Analyze the code and emit JSON inside <result> tags.",
+  output: Output.object({
+    tag: "result",
+    schema: z.object({ summary: z.string(), score: z.number() }),
+    maxRetries: 2, // 2 retries on top of the initial attempt
+  }),
+});
+```
+
+If you need to drive the retry loop manually — for example, to customise the feedback prompt or rotate models on each attempt — leave `maxRetries` at its default of `0` and resume the failed session yourself:
 
 ```ts
 import { run, Output, StructuredOutputError } from "@mauricioliu/ralph";
@@ -699,15 +763,19 @@ try {
 
 `ralph init` prompts you to choose a sandbox provider (Docker or Podman), an issue tracker (GitHub Issues, Beads, or Custom), and a template, which scaffolds a ready-to-use prompt and `main.mts` suited to a specific workflow. If your project's `package.json` has `"type": "module"`, the file will be named `main.ts` instead. Choosing **Custom** scaffolds the project in a deliberately broken-until-configured state plus a `.ralph/SETUP_ISSUE_TRACKER.md` prompt you feed to your coding agent, which wires up your own tracker by editing the scaffolded files in place. Five templates are available:
 
-| Template                       | Description                                                                                         |
-| ------------------------------ | --------------------------------------------------------------------------------------------------- |
-| `blank`                        | Bare scaffold — write your own prompt and orchestration                                             |
-| `simple-loop`                  | Picks issues one by one and closes them                                                             |
-| `sequential-reviewer`          | Implements issues one by one, with a code review step after each                                    |
-| `parallel-planner`             | Plans parallelizable issues, executes on separate branches, then merges                             |
-| `parallel-planner-with-review` | Conservatively selects one authorized issue, recovers/reviews its branch, then verifies integration |
+| Template                       | Description                                                               |
+| ------------------------------ | ------------------------------------------------------------------------- |
+| `blank`                        | Bare scaffold — write your own prompt and orchestration                   |
+| `simple-loop`                  | Picks issues one by one and closes them                                   |
+| `sequential-reviewer`          | Implements issues one by one, with a code review step after each          |
+| `parallel-planner`             | Plans parallelizable issues, executes on separate branches, then merges   |
+| `parallel-planner-with-review` | Plans parallelizable issues, executes with per-branch review, then merges |
 
 Select a template during `ralph init` when prompted, or re-run init in a fresh repo to try a different one.
+
+Pi templates use `openai-codex/gpt-6-astra:high` for the **planner** and `zai-coding-cn/glm-5.3:high` for **workers**: implementer, reviewer, merger, and the individual agent in `blank`/`simple-loop`. The `:high` suffix sets Pi's thinking level. The templates are the source of truth; customize each role in the generated `main.ts`/`main.mts`.
+
+Selecting Pi without `--model` preserves this split. An explicit `--model` replaces **every** role's model, even when equal to the worker default. Selecting another agent replaces every factory and uses that agent's default model (or the explicit `--model`). Sandbox selection and ESM filename detection still apply in all cases. Existing scaffolds are not migrated.
 
 ## CLI commands
 
@@ -715,37 +783,62 @@ Select a template during `ralph init` when prompted, or re-run init in a fresh r
 
 Scaffolds the `.ralph/` config directory and builds the container image. This is the first command you run in a new repo. You choose a sandbox provider (Docker or Podman) during init — selecting Podman writes a `Containerfile` instead of `Dockerfile` and uses `ralph podman build-image` for the build step.
 
-The `parallel-planner-with-review` scaffold requires an explicit launch allowlist, e.g. `RALPH_AUTHORIZED_ISSUES=42,43 npx tsx .ralph/main.mts`. Labels are not authorization; configure known external blockers in `main.mts`, and the planner must still check issue dependencies and missing human inputs. It selects at most one issue per round to prevent overlapping-module concurrency. Failures, incomplete reviews and no-progress runs stop immediately: there is no automatic provider switch or quota retry loop. A launch also refuses to start while another coordinator holds `.ralph/workflow-lock.json` (owner PID liveness is checked; see ADR 0022): a second coordinator exits non-zero before invoking any model, a lock left by a crashed coordinator is recovered automatically at the next launch, and an unreadable lock must be removed manually.
-
-Phase receipts are written atomically to `.ralph/workflow-state.json`. Keep this local file (and its `.tmp` sibling) out of version control. Existing unmerged branches go straight to acceptance review, including legacy branches without receipts; incomplete implementations must be rejected there. A `REVIEW_APPROVED` receipt permits resuming the merger only while both the branch SHA and reviewed target HEAD are unchanged. A merger's completion signal must also pass host-side git ancestry verification. The merger runs the project's required checks even on conflict-free merges. Tracker closure, human/visual acceptance, push and deployment remain separate; no automatic issue closure is performed. An already-integrated open issue stops for manual reconciliation after printing a reconciliation report (see ADR 0023). The same report is available on demand and read-only via `RALPH_RECONCILE=1 npx tsx .ralph/main.mts`: it lists, per authorized issue (or per persisted receipt when none are authorized), the current phase, branch, SHA and the next step needed to advance, taking no coordinator lock and calling no models. Empty plans mean no authorized unblocked work was selected, **not** that the whole backlog is complete. The historical template name is retained for compatibility; it now favors safe serial recovery over parallel throughput.
-
 Init detects your host package manager (npm, pnpm, yarn, or bun) from a `packageManager` field or lockfile, defaulting to npm. Templates whose `main` file imports a host dependency — the planner templates import [Zod](https://zod.dev) for their `<plan>` output schema — prompt you to install it with that package manager when it isn't already in your `package.json`, so the first `npx tsx .ralph/main.ts` doesn't fail with `ERR_MODULE_NOT_FOUND`.
 
 Every interactive prompt has a paired `--flag` so the entire init can run non-interactively (e.g. in CI or a scripted setup). When stdin is not a TTY and a required flag is missing, init fails fast with a clear error rather than wedging on a prompt.
 
-| Option                    | Required | Default                              | Description                                                                                                                                                                             |
-| ------------------------- | -------- | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--image-name`            | No       | `ralph:<repo-dir-name>`              | Docker image name                                                                                                                                                                       |
-| `--agent`                 | No       | Interactive prompt (preselects `pi`) | Agent to use (`pi`, `claude-code`, `codex`, `cursor`, `opencode`, `copilot`)                                                                                                            |
-| `--model`                 | No       | Agent's default model                | Model to use (e.g. `zai-coding-cn/glm-5.3:high`). Defaults to the agent's default model; with `pi` and no `--model`, the scaffolded template's planner/worker model split is kept as-is |
-| `--sandbox`               | No       | Interactive prompt                   | Sandbox provider to use (`docker`, `podman`)                                                                                                                                            |
-| `--template`              | No       | Interactive prompt                   | Template to scaffold (e.g. `blank`, `simple-loop`)                                                                                                                                      |
-| `--issue-tracker`         | No       | Interactive prompt                   | Issue tracker to use (`github-issues`, `beads`, `custom`)                                                                                                                               |
-| `--create-label`          | No       | Interactive prompt                   | `true` / `false` — whether to create the `Ralph` GitHub label (only with `--issue-tracker github-issues`)                                                                               |
-| `--build-image`           | No       | Interactive prompt                   | `true` / `false` — whether to build the sandbox image now (silently ignored with `--issue-tracker custom`)                                                                              |
-| `--install-template-deps` | No       | Interactive prompt                   | `true` / `false` — whether to install template host deps (e.g. `zod` for the planner templates)                                                                                         |
+| Option                    | Required | Default                                    | Description                                                                                                |
+| ------------------------- | -------- | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
+| `--image-name`            | No       | `ralph:<repo-dir-name>`                    | Docker image name                                                                                          |
+| `--agent`                 | No       | Interactive prompt (Pi preselected)        | Agent to use (`pi`, `claude-code`, `codex`, `cursor`, `opencode`, `copilot`); required without a TTY       |
+| `--model`                 | No       | Pi template split; otherwise agent default | Explicit model for **all** roles (e.g. `zai-coding-cn/glm-5.3:high`)                                       |
+| `--sandbox`               | No       | Interactive prompt                         | Sandbox provider to use (`docker`, `podman`)                                                               |
+| `--template`              | No       | Interactive prompt                         | Template to scaffold (e.g. `blank`, `simple-loop`)                                                         |
+| `--issue-tracker`         | No       | Interactive prompt                         | Issue tracker to use (`github-issues`, `beads`, `custom`)                                                  |
+| `--create-label`          | No       | Interactive prompt                         | `true` / `false` — whether to create the `Ralph` GitHub label (only with `--issue-tracker github-issues`)  |
+| `--build-image`           | No       | Interactive prompt                         | `true` / `false` — whether to build the sandbox image now (silently ignored with `--issue-tracker custom`) |
+| `--install-template-deps` | No       | Interactive prompt                         | `true` / `false` — whether to install template host deps (e.g. `zod` for the planner templates)            |
+
+For a non-interactive scaffold without label creation, dependency installation, image builds or agent execution:
+
+```bash
+npx @mauricioliu/ralph init --agent pi --template parallel-planner \
+  --sandbox docker --issue-tracker github-issues --create-label false \
+  --build-image false --install-template-deps false
+```
+
+This only scaffolds files; install the template's host dependencies, authenticate Pi and build the image separately before running it. No real-provider/OAuth validation is performed by init or the offline scaffold tests.
 
 Creates the following files:
 
 ```
 .ralph/
 ├── Dockerfile      # Sandbox environment (customize as needed)
+├── main.mts        # Agent entry point (main.ts in an ESM package)
 ├── prompt.md       # Agent instructions
 ├── .env.example    # Token placeholders
-└── .gitignore      # Ignores .env, logs/
+└── .gitignore      # Ignores .env, logs/, worktrees/
 ```
 
 Errors if `.ralph/` already exists to prevent overwriting customizations.
+
+### `ralph run`
+
+Runs `.ralph/main.ts` or `.ralph/main.mts` from the current directory. No arguments
+or extra flags are required. Ralph includes its TypeScript runtime, inherits the
+terminal streams and environment, forwards SIGINT/SIGTERM, and preserves the entry
+point's exit code. Missing or ambiguous entry points fail before execution: run
+`ralph init` if neither exists; keep only the intended file if both exist.
+
+```bash
+ralph run
+# Without a global install:
+npx @mauricioliu/ralph run
+```
+
+This launches the configured workflow as written; it adds no sandbox, authorization
+filter or merge restriction of its own. It is distinct from this repository's
+`npm run ralph` development script, which runs `.ralph/run.ts`.
 
 ### `ralph docker build-image`
 
@@ -785,7 +878,7 @@ Removes the Podman image.
 
 | Option                     | Type               | Default                       | Description                                                                                                                                                                                                                  |
 | -------------------------- | ------------------ | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `agent`                    | AgentProvider      | —                             | **Required.** Agent provider (e.g. `pi("zai-coding-cn/glm-5.3:high")`, `claudeCode("claude-opus-4-7")`, `codex("gpt-5.4")`, `cursor("composer-2")`, `opencode("opencode/big-pickle")`, `copilot("claude-sonnet-4.5")`)       |
+| `agent`                    | AgentProvider      | —                             | **Required.** Agent provider (e.g. `claudeCode("claude-opus-4-8")`, `pi("claude-sonnet-4-6")`, `codex("gpt-5.4")`, `cursor("composer-2")`, `opencode("opencode/big-pickle")`, `copilot("claude-sonnet-4.5")`)                |
 | `sandbox`                  | SandboxProvider    | —                             | **Required.** Sandbox provider (e.g. `docker()`, `podman()`, `docker({ imageName: "ralph:local" })`)                                                                                                                         |
 | `cwd`                      | string             | `process.cwd()`               | Host repo directory — anchor for `.ralph/` artifacts and git operations. Relative paths resolve against `process.cwd()`.                                                                                                     |
 | `prompt`                   | string             | —                             | Inline prompt (mutually exclusive with `promptFile`)                                                                                                                                                                         |
@@ -801,7 +894,7 @@ Removes the Podman image.
 | `idleTimeoutSeconds`       | number             | `600`                         | Idle timeout in seconds — resets on each agent output event                                                                                                                                                                  |
 | `completionTimeoutSeconds` | number             | `60`                          | Grace window in seconds after the completion signal is observed but the agent process has not exited (hanging process). See [Hanging processes after the completion signal](#hanging-processes-after-the-completion-signal). |
 | `resumeSession`            | string             | —                             | Resume a prior session by ID for agents that support resume. Incompatible with `maxIterations > 1`. Session file must exist on host.                                                                                         |
-| `signal`                   | AbortSignal        | —                             | Cancel the run when aborted. Kills the in-flight agent subprocess and cancels lifecycle hooks; the worktree is preserved on disk. Rejects with `signal.reason`.                                                              |
+| `signal`                   | AbortSignal        | —                             | Cancel awaiting the run and signal lifecycle hooks; preserve the worktree. Rejects with `signal.reason`. Process teardown is provider-dependent.                                                                             |
 | `timeouts`                 | Timeouts           | —                             | Override default timeouts for built-in lifecycle steps: `copyToWorktreeMs` (60 000), `gitSetupMs` (10 000), `commitCollectionMs` (30 000), `mergeToHostMs` (30 000).                                                         |
 | `output`                   | OutputDefinition   | —                             | Structured output definition (`Output.object(…)` or `Output.string(…)`). Requires `maxIterations === 1`. See [Structured output](#structured-output).                                                                        |
 
@@ -836,13 +929,11 @@ Removes the Podman image.
 
 ### Session capture
 
-After each resumable provider iteration, Ralph automatically captures the agent's session file from the sandbox to the host. Claude Code sessions are stored under `~/.claude/projects/<encoded-path>/<session-id>.jsonl`; Codex sessions are stored under `~/.codex/sessions/YYYY/MM/DD/rollout-*-<session-id>.jsonl`; Pi sessions are stored under `~/.pi/agent/sessions/--<encoded-cwd>--/<timestamp>_<session-id>.jsonl`. Any provider-specific `cwd` fields are rewritten to match the host repo root, so the provider's native resume command works.
+For bind-mount providers, after each resumable provider iteration Ralph automatically captures the agent's session file from the sandbox to the host. Isolated credential provisioning does not add session capture/resume to isolated providers; their existing session-transport limitation remains. Claude Code sessions are stored under `~/.claude/projects/<encoded-path>/<session-id>.jsonl`; Codex sessions are stored under `~/.codex/sessions/YYYY/MM/DD/rollout-*-<session-id>.jsonl`; Pi sessions are stored under `~/.pi/agent/sessions/--<encoded-cwd>--/<timestamp>_<session-id>.jsonl`. Any provider-specific `cwd` fields are rewritten to match the host repo root, so the provider's native resume command works.
+
+For Claude Code, any `Agent`-tool or `Workflow`-tool subagent transcripts written under `<session-id>/subagents/agent-*.jsonl` are captured alongside the main session. Subagent capture is best-effort: a failure on an individual transcript logs a warning and lets siblings and the main session through. Main-session capture failure still fails the run (see below).
 
 Session capture is enabled by default for `claudeCode()`, `codex()`, and `pi()` and can be opted out via `captureSessions: false`. Providers without `sessionStorage` do not attempt capture. Capture failure fails the run.
-
-### Credential transfer
-
-Pi's subscription models (`openai-codex` via ChatGPT Plus/Pro, `zai-coding-cn` via ZAI Coding Plan) authenticate through OAuth — there are no API-key environment variables a `.ralph/.env` could carry. When a run uses the `pi()` agent inside a sandbox, Ralph transfers the host's `~/.pi/agent/auth.json` (plus the `~/.pi/agent/models-store.json` model-catalog cache, when present) into the sandbox before the agent process starts, on every iteration. The copy is one-way: the host file stays authoritative, and a sandbox-side token refresh never propagates back. If the host has no `auth.json`, the run fails with an error naming the missing file — run `pi` on the host and authenticate once. The no-sandbox provider skips transfer entirely; its credentials already live on the host.
 
 ### Session resume
 
@@ -850,7 +941,7 @@ Pass `resumeSession` to `run()` to continue a prior Claude Code, Codex, or Pi co
 
 ```typescript
 const result = await run({
-  agent: pi("zai-coding-cn/glm-5.3:high"),
+  agent: claudeCode("claude-opus-4-8"),
   sandbox: docker(),
   prompt: "Continue where you left off",
   resumeSession: "abc-123-def",
@@ -888,7 +979,7 @@ Fork enables fan-out workflows where a single parent run is the starting point f
 
 ```typescript
 const parent = await run({
-  agent: pi("zai-coding-cn/glm-5.3:high"),
+  agent: claudeCode("claude-opus-4-8"),
   sandbox: docker(),
   prompt: "Read the codebase and summarise the data model",
 });
@@ -905,14 +996,14 @@ const [reviewA, reviewB] = await Promise.all([
 
 **Fork is session-only.** `--fork-session` and `codex exec fork` isolate the agent session JSONL — they do **not** isolate the branch, worktree, or sandbox. Safe concurrent fan-out (`Promise.all([r.fork(a), r.fork(b)])`) requires the caller to give each child a distinct `branch` via `branchStrategy: { type: "branch", branch: "..." }`. The default `head` and `merge-to-head` strategies are **not** safe for concurrent forks: `head` shares the host working directory across all children, and `merge-to-head` races `git merge` against the same HEAD. See [ADR 0018](docs/adr/0018-fork-is-session-only.md).
 
-`fork` is present only on results from providers with `sessionStorage` (Claude Code, Codex) — hence the optional-chaining call. The same single-iteration and session-file constraints as `.resume()` apply.
+`fork` handles are exposed on results from providers with `sessionStorage`; supported fork semantics are limited to Claude Code and Codex. **Pi supports capture and in-place resume, not session fork.** Its generic result may expose a `fork` handle, but invoking it rejects with `Pi session fork is not supported` before launching Pi, rather than silently resuming and mutating the parent session. No Pi parent/child isolation is claimed or validated. Use `.resume()` to continue a Pi conversation in place. The same single-iteration and session-file constraints as `.resume()` apply.
 
 ### `ClaudeCodeOptions`
 
 The `claudeCode()` factory accepts an optional second argument for provider-specific options:
 
 ```typescript
-agent: claudeCode("claude-opus-4-7", { effort: "high" });
+agent: claudeCode("claude-opus-4-8", { effort: "high" });
 ```
 
 | Option            | Type                                                                                           | Default | Description                                                                                                                                                                                    |
@@ -942,15 +1033,87 @@ agent: codex("gpt-5.4", { effort: "high" });
 The `pi()` factory accepts an optional second argument for provider-specific options:
 
 ```typescript
-agent: pi("zai-coding-cn/glm-5.3", { thinking: "high" });
+agent: pi("claude-sonnet-4-6", { thinking: "high" });
 ```
 
-| Option            | Type                                                                     | Default | Description                                                                                                                                                       |
-| ----------------- | ------------------------------------------------------------------------ | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `thinking`        | `"off"` \| `"minimal"` \| `"low"` \| `"medium"` \| `"high"` \| `"xhigh"` | —       | Pi reasoning effort level via the `--thinking` flag                                                                                                               |
-| `env`             | `Record<string, string>`                                                 | `{}`    | Environment variables injected by this agent provider                                                                                                             |
-| `captureSessions` | `boolean`                                                                | `true`  | Capture pi session JSONL to host for `pi --session <id>`                                                                                                          |
-| `credentials`     | `{ hostAgentDir?: string; sandboxAgentDir?: string }`                    | —       | Override pi credential directories (defaults: `~/.pi/agent` on the host, `/home/agent/.pi/agent` in the sandbox). See [Credential transfer](#credential-transfer) |
+| Option            | Type                                                                     | Default | Description                                              |
+| ----------------- | ------------------------------------------------------------------------ | ------- | -------------------------------------------------------- |
+| `thinking`        | `"off"` \| `"minimal"` \| `"low"` \| `"medium"` \| `"high"` \| `"xhigh"` | —       | Pi reasoning effort level via the `--thinking` flag      |
+| `env`             | `Record<string, string>`                                                 | `{}`    | Environment variables injected by this agent provider    |
+| `captureSessions` | `boolean`                                                                | `true`  | Capture pi session JSONL to host for `pi --session <id>` |
+
+### Pi sandbox credentials
+
+`pi()` opts into one-way credential provisioning. Before every agent launch,
+Ralph copies the host's `~/.pi/agent/auth.json` and, when present,
+`models-store.json` into the sandbox. This applies to `run()`,
+`interactive()`, `Worktree.run()/interactive()`, and
+`Sandbox.run()/interactive()` (including worktree-backed sandboxes).
+No-sandbox runs skip transfer because Pi already reads the host files.
+
+Authenticate with Pi **on the host** first. The host directory defaults to
+`PI_CODING_AGENT_DIR` when set, otherwise `~/.pi/agent`. The destination
+defaults to the normal exec user's runtime `PI_CODING_AGENT_DIR` when nonempty,
+otherwise `$HOME/.pi/agent`, not a hardcoded user path. Non-standard installs
+can override both directories:
+
+```typescript
+const agent = pi("claude-sonnet-4-6", {
+  credentials: {
+    hostAgentDir: "/home/me/custom-pi",
+    sandboxAgentDir: "/home/agent/custom-pi",
+  },
+});
+```
+
+The sandbox override also sets Pi's `PI_CODING_AGENT_DIR` in provider env
+(and therefore applies to no-sandbox launches too). Alternatively set that
+variable in `PiOptions.env` to select the transfer destination. Explicit Pi
+overrides are applied to every launch, including reusable sandboxes created
+before the agent was selected. Host launches use the native process environment
+(including Windows/cmd.exe); Linux sandboxes use POSIX `env` regardless of host OS. Daytona forwards launch env
+through the SDK's `envVars`, overriding conflicting template env keys. Its synced
+repository lives in `ralph-workspace/` beneath the SDK work directory, not HOME
+itself; this child is initialized before the handle is returned. Credential
+directories are checked against the physical worktree before writes or mode
+changes. Symlink ancestors and unverifiable paths are rejected to prevent
+secrets entering sync artifacts; keep overrides outside the repository. Session
+directory overrides remain independent under `sessionStorage`; changing
+credential directories does not change Ralph's session capture/resume paths.
+
+Ralph creates and verifies private destination/staging directories (`0700`)
+and credential files (`0600`). Providers need shell exec, `stat -c %a`,
+`chmod`, GNU-compatible `realpath -e/-m`, and host→sandbox copy. If a runtime's copy creates root-owned files,
+its existing `exec(..., { sudo: true })` capability must support ownership
+repair. Missing auth/copy capabilities, failed commands/copies or failed
+permission checks stop the launch with `CredentialProvisionError` (exported
+from the package); transport output and credential contents are not included
+in that error.
+
+**The host is authoritative.** Sandbox token refreshes are never copied back.
+Each subsequent call re-copies current host credentials, even on a warm
+sandbox; a catalog removed on the host is removed from the sandbox too.
+Failed/aborted transfers clean their private staging files before returning.
+Cancellation waits for an in-flight copy to settle before cleanup, rather
+than leaving a background write racing the next call. A reusable handle stays
+open after transfer failure/abort for retry; if cleanup itself fails, close
+the sandbox before retrying. Do not bind-mount the host credential directory
+writable into the sandbox: use the one-way transfer instead.
+
+Custom agent providers opt in through optional
+`AgentProvider.provisionCredentials({ handle, signal })`. Its
+`CredentialSandboxHandle` exposes `exec`, host→sandbox `copyFile`, and
+`validateDirectory` (required before directory writes or mode changes);
+it is intentionally separate from the bind-mount session capture/resume
+handle, which retains its upstream behavior. Providers without this hook
+are unchanged.
+
+Automated coverage uses synthetic credentials and mock agent launches only.
+A real authenticated Pi run inside a real sandbox, including provider OAuth
+refresh behavior, is a separate manual validation; it is not exercised by
+the test suite. See the [credential entry/provider validation matrix](docs/rebuild/ticket-13.md)
+for automated coverage and remaining real-runtime limitations (including the
+built-in isolated providers' lack of interactive transport).
 
 ### Provider `env`
 
@@ -958,7 +1121,7 @@ Both **agent providers** and **sandbox providers** accept an optional `env: Reco
 
 ```typescript
 await run({
-  agent: claudeCode("claude-opus-4-7", {
+  agent: claudeCode("claude-opus-4-8", {
     env: { ANTHROPIC_API_KEY: "sk-ant-..." },
   }),
   sandbox: docker({
@@ -1217,7 +1380,7 @@ const tempDir = () =>
 
 ### Branch strategies
 
-A branch strategy controls where the agent's commits land. Configure it when constructing the provider:
+A branch strategy controls where the agent's commits land. Configure `branchStrategy` on `run()` / `interactive()` or `createWorktree()`, not on the sandbox provider. `createSandbox()` instead takes an explicit `branch`:
 
 | Strategy        | Behavior                                                                 | Bind-mount | Isolated  |
 | --------------- | ------------------------------------------------------------------------ | ---------- | --------- |
@@ -1234,24 +1397,24 @@ A branch strategy controls where the agent's commits land. Configure it when con
 Branch strategy is now configured on `run()`, not on the provider:
 
 ```typescript
-import { run, pi } from "@mauricioliu/ralph";
+import { run, claudeCode } from "@mauricioliu/ralph";
 import { docker } from "@mauricioliu/ralph/sandboxes/docker";
 
 // head — direct write, bind-mount only (default for bind-mount providers)
 await run({
-  agent: pi("zai-coding-cn/glm-5.3:high"),
+  agent: claudeCode("claude-opus-4-8"),
   sandbox: docker(),
   prompt: "…",
 });
 // merge-to-head — temp branch, merge back (default for isolated providers)
 await run({
-  agent: pi("zai-coding-cn/glm-5.3:high"),
+  agent: claudeCode("claude-opus-4-8"),
   sandbox: tempDir(),
   prompt: "…",
 });
 // branch — explicit named branch
 await run({
-  agent: pi("zai-coding-cn/glm-5.3:high"),
+  agent: claudeCode("claude-opus-4-8"),
   sandbox: docker(),
   branchStrategy: { type: "branch", branch: "agent/fix-42" },
   prompt: "…",
@@ -1263,10 +1426,10 @@ await run({
 Pass your custom provider via the `sandbox` option — it works the same as the built-in `docker()` provider:
 
 ```typescript
-import { run, pi } from "@mauricioliu/ralph";
+import { run, claudeCode } from "@mauricioliu/ralph";
 
 const result = await run({
-  agent: pi("zai-coding-cn/glm-5.3:high"),
+  agent: claudeCode("claude-opus-4-8"),
   sandbox: localProcess(), // your custom provider
   prompt: "Fix issue #42 in this repo.",
 });
@@ -1289,20 +1452,20 @@ All per-repo sandbox configuration lives in `.ralph/`. Run `ralph init` to creat
 
 ### Custom Dockerfile
 
-The `.ralph/Dockerfile` controls the sandbox environment. The default template — scaffolded for the default pi agent — installs:
+The `.ralph/Dockerfile` controls the sandbox environment. The default template installs:
 
 - **Node.js 22** (base image)
 - **git**, **curl**, **jq** (system dependencies)
 - **GitHub CLI** (`gh`)
-- **Pi coding agent** (`@earendil-works/pi-coding-agent`)
-- A non-root `agent` user (required — the agent runs as this user)
+- **Pi CLI** (`@earendil-works/pi-coding-agent`) by default; the selected alternative agent's CLI otherwise
+- A non-root `agent` user
 
 When customizing the Dockerfile, ensure you keep:
 
-- A non-root user (the default `agent` user) for the agent to run as
+- A non-root user (the default `agent` user) for the selected agent
 - `git` (required for commits and branch operations)
 - `gh` (required for issue fetching)
-- Your agent's CLI installed and on PATH — pi for the default template; the selected agent's CLI (Claude Code, Codex, …) if you chose a different one during init
+- The selected agent CLI installed and on PATH (Pi by default)
 
 Add your project-specific dependencies (e.g., language runtimes, build tools) to the Dockerfile as needed.
 
@@ -1346,8 +1509,14 @@ hooks: {
 npm install
 npm run build    # Bundle with tsup
 npm test         # Run tests with vitest
-npm run typecheck # Type-check
+npm run typecheck # Type-check library and dogfood scripts (build first)
 ```
+
+The repository's own `.ralph` scripts and agent workflows use Pi with the same
+planner/worker split as init. See [dogfood setup and limitations](.ralph/README.md)
+for host credential transfer, CI secrets, sequential exploration and the boundary
+between offline checks and real-agent smoke runs. The `ralph`, `test-podman`,
+`test-vercel` and `test-interactive` npm scripts are **not** offline tests.
 
 ## License
 

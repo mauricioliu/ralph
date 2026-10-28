@@ -2,8 +2,8 @@
  * Docker sandbox provider — wraps DockerLifecycle into a SandboxProvider.
  *
  * Usage:
- *   import { docker } from "ralph/sandboxes/docker";
- *   await run({ agent: claudeCode("claude-opus-4-7"), sandbox: docker() });
+ *   import { docker } from "@mauricioliu/ralph/sandboxes/docker";
+ *   await run({ agent: claudeCode("claude-opus-4-8"), sandbox: docker() });
  */
 
 import {

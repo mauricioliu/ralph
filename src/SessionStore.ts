@@ -71,6 +71,59 @@ export const claudeSandboxSessionPath = (
 ): string => posix.join(projectsDir, encodeProjectPath(cwd), `${id}.jsonl`);
 
 /**
+ * Sandbox-side path to the directory holding subagent / workflow transcripts
+ * for a given Claude Code session, following Claude Code's
+ * `<projectsDir>/<encoded-cwd>/<sessionId>/subagents/` layout. POSIX
+ * separators so it works on Windows hosts driving Linux containers.
+ */
+export const claudeSubagentsDirInSandbox = (
+  cwd: string,
+  id: string,
+  projectsDir: string,
+): string => posix.join(projectsDir, encodeProjectPath(cwd), id, "subagents");
+
+/**
+ * Host-side path to the directory holding subagent / workflow transcripts for
+ * a given Claude Code session. Defaults to `~/.claude/projects` when no
+ * `projectsDir` is provided.
+ */
+export const claudeSubagentsDirOnHost = (
+  cwd: string,
+  id: string,
+  projectsDir?: string,
+): string => {
+  const base =
+    projectsDir ?? join(process.env.HOME ?? "~", ".claude", "projects");
+  return join(base, encodeProjectPath(cwd), id, "subagents");
+};
+
+/**
+ * Enumerate Claude Code subagent / workflow transcripts living under
+ * `<projectsDir>/<encoded-cwd>/<sessionId>/subagents/` inside the sandbox.
+ * Returns the absolute sandbox-side paths of every `agent-*.jsonl` file
+ * (matched at any depth so future per-workflow subdirs still surface).
+ *
+ * Never throws — a missing `subagents/` directory is the normal case for a
+ * session that didn't spawn any subagents, and `find` over an absent path
+ * also exits non-zero. Both collapse to `[]`.
+ */
+export const listClaudeSubagentSessionsInSandbox = async (
+  cwd: string,
+  id: string,
+  handle: Pick<BindMountSandboxHandle, "exec">,
+  sandboxProjectsDir: string,
+): Promise<string[]> => {
+  const dir = claudeSubagentsDirInSandbox(cwd, id, sandboxProjectsDir);
+  const result = await handle.exec(
+    `find ${JSON.stringify(dir)} -type f -name ${JSON.stringify("agent-*.jsonl")} 2>/dev/null`,
+  );
+  if (result.exitCode !== 0) return [];
+  const stdout = result.stdout.trim();
+  if (stdout === "") return [];
+  return stdout.split("\n").filter((line) => line !== "");
+};
+
+/**
  * Locate a Claude Code session JSONL on the host by its unique id, scanning each
  * `~/.claude/projects/<encoded-cwd>/` directory rather than reconstructing the
  * cwd encoding. The session id is globally unique, so the first match wins.
@@ -107,20 +160,26 @@ const rewriteSessionCwd = (
     .split("\n")
     .map((line) => {
       if (line === "") return line;
-      const entry = JSON.parse(line) as Record<string, unknown>;
-      if (typeof entry.cwd === "string" && entry.cwd === fromCwd) {
-        entry.cwd = toCwd;
+      // A torn final line (writer killed mid-flush) must not abort the whole
+      // transfer — preserve it verbatim so the rest of the session survives.
+      try {
+        const entry = JSON.parse(line) as Record<string, unknown>;
+        if (typeof entry.cwd === "string" && entry.cwd === fromCwd) {
+          entry.cwd = toCwd;
+        }
+        if (
+          entry.type === "session_meta" &&
+          typeof entry.payload === "object" &&
+          entry.payload !== null &&
+          typeof (entry.payload as { cwd?: unknown }).cwd === "string" &&
+          (entry.payload as { cwd: string }).cwd === fromCwd
+        ) {
+          (entry.payload as { cwd: string }).cwd = toCwd;
+        }
+        return JSON.stringify(entry);
+      } catch {
+        return line;
       }
-      if (
-        entry.type === "session_meta" &&
-        typeof entry.payload === "object" &&
-        entry.payload !== null &&
-        typeof (entry.payload as { cwd?: unknown }).cwd === "string" &&
-        (entry.payload as { cwd: string }).cwd === fromCwd
-      ) {
-        (entry.payload as { cwd: string }).cwd = toCwd;
-      }
-      return JSON.stringify(entry);
     })
     .join("\n");
 };
@@ -247,29 +306,6 @@ export const piSessionDirPath = (cwd: string, sessionsDir?: string): string => {
     sessionsDir ?? join(process.env.HOME ?? "~", ".pi", "agent", "sessions");
   return join(base, encodePiSessionDir(cwd));
 };
-
-// ---------------------------------------------------------------------------
-// Pi credential paths (auth.json / models-store.json)
-// ---------------------------------------------------------------------------
-
-/**
- * Absolute host path to the pi agent directory that holds credentials.
- * Defaults to `~/.pi/agent` — the same directory pi's own CLI reads.
- */
-export const piHostAgentDir = (agentDir?: string): string =>
-  agentDir ?? join(process.env.HOME ?? "~", ".pi", "agent");
-
-/** Absolute host path to pi's OAuth auth file. Required for sandbox runs. */
-export const piHostAuthPath = (agentDir?: string): string =>
-  join(piHostAgentDir(agentDir), "auth.json");
-
-/** Absolute host path to pi's cached model catalog. Transferred when present. */
-export const piHostModelsStorePath = (agentDir?: string): string =>
-  join(piHostAgentDir(agentDir), "models-store.json");
-
-/** Sandbox-side pi agent directory (always POSIX separators). */
-export const piSandboxAgentDir = (agentDir?: string): string =>
-  agentDir ?? posix.join("/home/agent", ".pi", "agent");
 
 const isPiSessionFilename = (filename: string, id: string): boolean =>
   filename.endsWith(`_${id}.jsonl`);

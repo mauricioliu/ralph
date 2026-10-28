@@ -1,12 +1,4 @@
-import { exec as nodeExec } from "node:child_process";
-import {
-  copyFile,
-  mkdtemp,
-  mkdir,
-  readFile,
-  rm,
-  writeFile,
-} from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, posix } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -15,8 +7,6 @@ import {
   codex,
   copilot,
   cursor,
-  DEFAULT_MODEL,
-  minimax,
   opencode,
   pi,
 } from "./AgentProvider.js";
@@ -29,20 +19,14 @@ const opts = (prompt: string): AgentCommandOptions => ({
   dangerouslySkipPermissions: true,
 });
 
-describe("DEFAULT_MODEL", () => {
-  it("points at pi's worker model (ADR 0021)", () => {
-    expect(DEFAULT_MODEL).toBe("zai-coding-cn/glm-5.3:high");
-  });
-});
-
 describe("claudeCode factory", () => {
   it("returns a provider with name 'claude-code'", () => {
-    const provider = claudeCode("claude-opus-4-7");
+    const provider = claudeCode("claude-opus-4-8");
     expect(provider.name).toBe("claude-code");
   });
 
   it("does not expose envManifest or dockerfileTemplate", () => {
-    const provider = claudeCode("claude-opus-4-7");
+    const provider = claudeCode("claude-opus-4-8");
     expect(provider).not.toHaveProperty("envManifest");
     expect(provider).not.toHaveProperty("dockerfileTemplate");
   });
@@ -56,7 +40,7 @@ describe("claudeCode factory", () => {
   });
 
   it("buildPrintCommand delivers prompt via stdin, not argv", () => {
-    const provider = claudeCode("claude-opus-4-7");
+    const provider = claudeCode("claude-opus-4-8");
     const { command, stdin } = provider.buildPrintCommand(opts("do something"));
     expect(command).toContain("-p -");
     expect(command).not.toContain("'do something'");
@@ -64,13 +48,13 @@ describe("claudeCode factory", () => {
   });
 
   it("buildPrintCommand shell-escapes the model", () => {
-    const provider = claudeCode("claude-opus-4-7");
+    const provider = claudeCode("claude-opus-4-8");
     const { command } = provider.buildPrintCommand(opts("do something"));
-    expect(command).toContain("--model 'claude-opus-4-7'");
+    expect(command).toContain("--model 'claude-opus-4-8'");
   });
 
   it("parseStreamLine extracts text from assistant message", () => {
-    const provider = claudeCode("claude-opus-4-7");
+    const provider = claudeCode("claude-opus-4-8");
     const line = JSON.stringify({
       type: "assistant",
       message: { content: [{ type: "text", text: "Hello world" }] },
@@ -81,7 +65,7 @@ describe("claudeCode factory", () => {
   });
 
   it("parseStreamLine extracts result from result message", () => {
-    const provider = claudeCode("claude-opus-4-7");
+    const provider = claudeCode("claude-opus-4-8");
     const line = JSON.stringify({
       type: "result",
       result: "Final answer <promise>COMPLETE</promise>",
@@ -95,13 +79,13 @@ describe("claudeCode factory", () => {
   });
 
   it("parseStreamLine returns empty array for non-JSON lines", () => {
-    const provider = claudeCode("claude-opus-4-7");
+    const provider = claudeCode("claude-opus-4-8");
     expect(provider.parseStreamLine("not json")).toEqual([]);
     expect(provider.parseStreamLine("")).toEqual([]);
   });
 
   it("parseStreamLine extracts tool_use block (Bash → command arg)", () => {
-    const provider = claudeCode("claude-opus-4-7");
+    const provider = claudeCode("claude-opus-4-8");
     const line = JSON.stringify({
       type: "assistant",
       message: {
@@ -130,26 +114,26 @@ describe("claudeCode factory", () => {
   });
 
   it("buildPrintCommand includes --effort when specified", () => {
-    const provider = claudeCode("claude-opus-4-7", { effort: "high" });
+    const provider = claudeCode("claude-opus-4-8", { effort: "high" });
     const { command } = provider.buildPrintCommand(opts("do something"));
     expect(command).toContain("--effort high");
   });
 
   it("buildPrintCommand omits --effort when not specified", () => {
-    const provider = claudeCode("claude-opus-4-7");
+    const provider = claudeCode("claude-opus-4-8");
     const { command } = provider.buildPrintCommand(opts("do something"));
     expect(command).not.toContain("--effort");
   });
 
   it("buildPrintCommand omits --effort when options is empty", () => {
-    const provider = claudeCode("claude-opus-4-7", {});
+    const provider = claudeCode("claude-opus-4-8", {});
     const { command } = provider.buildPrintCommand(opts("do something"));
     expect(command).not.toContain("--effort");
   });
 
   it("supports all effort levels", () => {
     for (const effort of ["low", "medium", "high", "xhigh", "max"] as const) {
-      const provider = claudeCode("claude-opus-4-7", { effort });
+      const provider = claudeCode("claude-opus-4-8", { effort });
       expect(provider.buildPrintCommand(opts("test")).command).toContain(
         `--effort ${effort}`,
       );
@@ -157,21 +141,21 @@ describe("claudeCode factory", () => {
   });
 
   it("accepts an env option and exposes it on the provider", () => {
-    const provider = claudeCode("claude-opus-4-7", {
+    const provider = claudeCode("claude-opus-4-8", {
       env: { ANTHROPIC_API_KEY: "sk-test" },
     });
     expect(provider.env).toEqual({ ANTHROPIC_API_KEY: "sk-test" });
   });
 
   it("defaults env to empty object when not provided", () => {
-    const provider = claudeCode("claude-opus-4-7");
+    const provider = claudeCode("claude-opus-4-8");
     expect(provider.env).toEqual({});
   });
 
   // --- dangerouslySkipPermissions conditional tests ---
 
   it("buildPrintCommand includes --dangerously-skip-permissions when true", () => {
-    const provider = claudeCode("claude-opus-4-7");
+    const provider = claudeCode("claude-opus-4-8");
     const { command } = provider.buildPrintCommand({
       prompt: "test",
       dangerouslySkipPermissions: true,
@@ -180,7 +164,7 @@ describe("claudeCode factory", () => {
   });
 
   it("parseStreamLine emits session_id from Claude Code init line", () => {
-    const provider = claudeCode("claude-opus-4-7");
+    const provider = claudeCode("claude-opus-4-8");
     const line = JSON.stringify({
       type: "system",
       subtype: "init",
@@ -192,7 +176,7 @@ describe("claudeCode factory", () => {
   });
 
   it("parseStreamLine ignores system events without subtype init", () => {
-    const provider = claudeCode("claude-opus-4-7");
+    const provider = claudeCode("claude-opus-4-8");
     const line = JSON.stringify({
       type: "system",
       subtype: "other",
@@ -202,7 +186,7 @@ describe("claudeCode factory", () => {
   });
 
   it("parseStreamLine ignores system init without session_id", () => {
-    const provider = claudeCode("claude-opus-4-7");
+    const provider = claudeCode("claude-opus-4-8");
     const line = JSON.stringify({
       type: "system",
       subtype: "init",
@@ -211,7 +195,7 @@ describe("claudeCode factory", () => {
   });
 
   it("buildPrintCommand includes --resume when resumeSession is set", () => {
-    const provider = claudeCode("claude-opus-4-7");
+    const provider = claudeCode("claude-opus-4-8");
     const { command } = provider.buildPrintCommand({
       prompt: "test",
       dangerouslySkipPermissions: true,
@@ -221,7 +205,7 @@ describe("claudeCode factory", () => {
   });
 
   it("buildPrintCommand omits --resume when resumeSession is not set", () => {
-    const provider = claudeCode("claude-opus-4-7");
+    const provider = claudeCode("claude-opus-4-8");
     const { command } = provider.buildPrintCommand({
       prompt: "test",
       dangerouslySkipPermissions: true,
@@ -230,7 +214,7 @@ describe("claudeCode factory", () => {
   });
 
   it("buildPrintCommand appends --fork-session when resumeSession + forkSession are set", () => {
-    const provider = claudeCode("claude-opus-4-7");
+    const provider = claudeCode("claude-opus-4-8");
     const { command } = provider.buildPrintCommand({
       prompt: "test",
       dangerouslySkipPermissions: true,
@@ -244,7 +228,7 @@ describe("claudeCode factory", () => {
   it("buildPrintCommand omits --fork-session when forkSession is set without resumeSession", () => {
     // RunOptions validation rejects this combination, but buildPrintCommand
     // is permissive and should simply not emit a meaningless flag.
-    const provider = claudeCode("claude-opus-4-7");
+    const provider = claudeCode("claude-opus-4-8");
     const { command } = provider.buildPrintCommand({
       prompt: "test",
       dangerouslySkipPermissions: true,
@@ -255,7 +239,7 @@ describe("claudeCode factory", () => {
   });
 
   it("buildPrintCommand omits --fork-session when forkSession is false", () => {
-    const provider = claudeCode("claude-opus-4-7");
+    const provider = claudeCode("claude-opus-4-8");
     const { command } = provider.buildPrintCommand({
       prompt: "test",
       dangerouslySkipPermissions: true,
@@ -267,7 +251,7 @@ describe("claudeCode factory", () => {
   });
 
   it("buildPrintCommand omits --dangerously-skip-permissions when false", () => {
-    const provider = claudeCode("claude-opus-4-7");
+    const provider = claudeCode("claude-opus-4-8");
     const { command } = provider.buildPrintCommand({
       prompt: "test",
       dangerouslySkipPermissions: false,
@@ -276,7 +260,7 @@ describe("claudeCode factory", () => {
   });
 
   it("buildInteractiveArgs includes --dangerously-skip-permissions when true", () => {
-    const provider = claudeCode("claude-opus-4-7");
+    const provider = claudeCode("claude-opus-4-8");
     const args = provider.buildInteractiveArgs!({
       prompt: "test",
       dangerouslySkipPermissions: true,
@@ -285,7 +269,7 @@ describe("claudeCode factory", () => {
   });
 
   it("buildInteractiveArgs omits --dangerously-skip-permissions when false", () => {
-    const provider = claudeCode("claude-opus-4-7");
+    const provider = claudeCode("claude-opus-4-8");
     const args = provider.buildInteractiveArgs!({
       prompt: "test",
       dangerouslySkipPermissions: false,
@@ -296,7 +280,7 @@ describe("claudeCode factory", () => {
   // --- permissionMode option ---
 
   it("buildPrintCommand emits --permission-mode when permissionMode is set", () => {
-    const provider = claudeCode("claude-opus-4-7", { permissionMode: "auto" });
+    const provider = claudeCode("claude-opus-4-8", { permissionMode: "auto" });
     const { command } = provider.buildPrintCommand(opts("test"));
     expect(command).toContain("--permission-mode auto");
   });
@@ -305,7 +289,7 @@ describe("claudeCode factory", () => {
     // Ralph's AFK call sites pass dangerouslySkipPermissions: true. When the
     // user opts into a specific permission mode on the provider, that mode takes
     // precedence over the default bypass — they are mutually exclusive on claude's CLI.
-    const provider = claudeCode("claude-opus-4-7", { permissionMode: "auto" });
+    const provider = claudeCode("claude-opus-4-8", { permissionMode: "auto" });
     const { command } = provider.buildPrintCommand({
       prompt: "test",
       dangerouslySkipPermissions: true,
@@ -314,13 +298,13 @@ describe("claudeCode factory", () => {
   });
 
   it("buildPrintCommand omits --permission-mode when permissionMode is not set", () => {
-    const provider = claudeCode("claude-opus-4-7");
+    const provider = claudeCode("claude-opus-4-8");
     const { command } = provider.buildPrintCommand(opts("test"));
     expect(command).not.toContain("--permission-mode");
   });
 
   it("buildInteractiveArgs emits --permission-mode when permissionMode is set", () => {
-    const provider = claudeCode("claude-opus-4-7", { permissionMode: "plan" });
+    const provider = claudeCode("claude-opus-4-8", { permissionMode: "plan" });
     const args = provider.buildInteractiveArgs!({
       prompt: "test",
       dangerouslySkipPermissions: false,
@@ -330,7 +314,7 @@ describe("claudeCode factory", () => {
   });
 
   it("buildInteractiveArgs omits --dangerously-skip-permissions when permissionMode is set", () => {
-    const provider = claudeCode("claude-opus-4-7", { permissionMode: "auto" });
+    const provider = claudeCode("claude-opus-4-8", { permissionMode: "auto" });
     const args = provider.buildInteractiveArgs!({
       prompt: "test",
       dangerouslySkipPermissions: true,
@@ -597,16 +581,26 @@ describe("pi factory", () => {
     ]);
   });
 
-  it("keeps agent_error without an extractable message as failure", () => {
-    expect(
-      pi("test").parseStreamLine(JSON.stringify({ type: "agent_error" })),
-    ).toEqual([{ type: "error", message: "Pi agent_error" }]);
+  it("parseStreamLine keeps agent_error with no extractable message as failure", () => {
+    const provider = pi("claude-sonnet-4-6");
+    const line = JSON.stringify({
+      type: "agent_error",
+      // no error field
+    });
+    expect(provider.parseStreamLine(line)).toEqual([
+      { type: "error", message: "Pi agent_error" },
+    ]);
   });
 
-  it("keeps an error without an extractable message as failure", () => {
-    expect(
-      pi("test").parseStreamLine(JSON.stringify({ type: "error" })),
-    ).toEqual([{ type: "error", message: "Pi error" }]);
+  it("parseStreamLine keeps error with no extractable message as failure", () => {
+    const provider = pi("claude-sonnet-4-6");
+    const line = JSON.stringify({
+      type: "error",
+      // no message or error field
+    });
+    expect(provider.parseStreamLine(line)).toEqual([
+      { type: "error", message: "Pi error" },
+    ]);
   });
 
   it("accepts an env option and exposes it on the provider", () => {
@@ -1012,8 +1006,8 @@ describe("codex factory", () => {
   });
 
   it("accepts an env option and exposes it on the provider", () => {
-    const provider = codex("gpt-5.4-mini", { env: { OPENAI_KEY: "xyz" } });
-    expect(provider.env).toEqual({ OPENAI_KEY: "xyz" });
+    const provider = codex("gpt-5.4-mini", { env: { CODEX_API_KEY: "xyz" } });
+    expect(provider.env).toEqual({ CODEX_API_KEY: "xyz" });
   });
 
   it("defaults env to empty object when not provided", () => {
@@ -1967,154 +1961,15 @@ describe("copilot factory", () => {
   });
 });
 
-describe("minimax factory", () => {
-  it("returns a provider with name 'minimax'", () => {
-    const provider = minimax("MiniMax-3.0");
-    expect(provider.name).toBe("minimax");
-  });
-
-  it("buildPrintCommand uses minimax -p and includes the model", () => {
-    const provider = minimax("MiniMax-3.0");
-    const { command, stdin } = provider.buildPrintCommand(opts("do something"));
-    expect(command).toContain("minimax");
-    expect(command).toContain("--model");
-    expect(command).toContain("MiniMax-3.0");
-    expect(command).toContain("-p");
-    expect(stdin).toBe("do something");
-  });
-
-  it("buildPrintCommand shell-escapes the model", () => {
-    const provider = minimax("MiniMax-M2.7");
-    const { command } = provider.buildPrintCommand(opts("do something"));
-    expect(command).toContain("'MiniMax-M2.7'");
-  });
-
-  it("buildPrintCommand delivers prompt via stdin", () => {
-    const provider = minimax("MiniMax-3.0");
-    const { command, stdin } = provider.buildPrintCommand(opts("hello world"));
-    expect(command).not.toContain("hello world");
-    expect(stdin).toBe("hello world");
-  });
-
-  it("parseStreamLine extracts text event", () => {
-    const provider = minimax("MiniMax-3.0");
-    const line = JSON.stringify({ type: "text", text: "Hello world" });
-    expect(provider.parseStreamLine(line)).toEqual([
-      { type: "text", text: "Hello world" },
-    ]);
-  });
-
-  it("parseStreamLine extracts result event", () => {
-    const provider = minimax("MiniMax-3.0");
-    const line = JSON.stringify({
-      type: "result",
-      result: "Final answer <promise>COMPLETE</promise>",
-    });
-    expect(provider.parseStreamLine(line)).toEqual([
-      {
-        type: "result",
-        result: "Final answer <promise>COMPLETE</promise>",
-      },
-    ]);
-  });
-
-  it("parseStreamLine extracts tool_call event", () => {
-    const provider = minimax("MiniMax-3.0");
-    const line = JSON.stringify({
-      type: "tool_call",
-      name: "Bash",
-      args: "ls -la",
-    });
-    expect(provider.parseStreamLine(line)).toEqual([
-      { type: "tool_call", name: "Bash", args: "ls -la" },
-    ]);
-  });
-
-  it("parseStreamLine extracts session_id event", () => {
-    const provider = minimax("MiniMax-3.0");
-    const line = JSON.stringify({
-      type: "session_id",
-      sessionId: "minimax-session-123",
-    });
-    expect(provider.parseStreamLine(line)).toEqual([
-      { type: "session_id", sessionId: "minimax-session-123" },
-    ]);
-  });
-
-  it("parseStreamLine extracts usage event", () => {
-    const provider = minimax("MiniMax-3.0");
-    const line = JSON.stringify({
-      type: "usage",
-      usage: {
-        inputTokens: 1000,
-        cacheCreationInputTokens: 0,
-        cacheReadInputTokens: 500,
-        outputTokens: 200,
-      },
-    });
-    expect(provider.parseStreamLine(line)).toEqual([
-      {
-        type: "usage",
-        usage: {
-          inputTokens: 1000,
-          cacheCreationInputTokens: 0,
-          cacheReadInputTokens: 500,
-          outputTokens: 200,
-        },
-      },
-    ]);
-  });
-
-  it("parseStreamLine ignores non-JSON lines", () => {
-    const provider = minimax("MiniMax-3.0");
-    expect(provider.parseStreamLine("not json")).toEqual([]);
-    expect(provider.parseStreamLine("")).toEqual([]);
-    expect(provider.parseStreamLine("  plain text line")).toEqual([]);
-  });
-
-  it("parseStreamLine ignores incomplete usage (missing fields)", () => {
-    const provider = minimax("MiniMax-3.0");
-    const line = JSON.stringify({
-      type: "usage",
-      usage: { inputTokens: 1000 },
-    });
-    expect(provider.parseStreamLine(line)).toEqual([]);
-  });
-
-  it("captureSessions defaults to false", () => {
-    const provider = minimax("MiniMax-3.0");
-    expect(provider.captureSessions).toBe(false);
-  });
-
-  it("buildInteractiveArgs includes --model flag", () => {
-    const provider = minimax("MiniMax-3.0");
-    const args = provider.buildInteractiveArgs!({
-      prompt: "hello",
-      dangerouslySkipPermissions: true,
-    });
-    expect(args).toContain("--model");
-    expect(args).toContain("MiniMax-3.0");
-  });
-
-  it("buildInteractiveArgs passes prompt as positional arg", () => {
-    const provider = minimax("MiniMax-3.0");
-    const args = provider.buildInteractiveArgs!({
-      prompt: "hello",
-      dangerouslySkipPermissions: true,
-    });
-    expect(args[args.length - 1]).toBe("hello");
-  });
-});
-
 describe("parseSessionUsage (Claude Code)", () => {
-  const provider = claudeCode("claude-opus-4-7");
+  const provider = claudeCode("claude-opus-4-8");
 
   it("extracts usage from the last assistant message in a JSONL string", () => {
     const content = [
       JSON.stringify({
         type: "assistant",
         message: {
-          model: "claude-opus-4-7",
+          model: "claude-opus-4-8",
           usage: {
             input_tokens: 100,
             cache_creation_input_tokens: 200,
@@ -2126,7 +1981,7 @@ describe("parseSessionUsage (Claude Code)", () => {
       JSON.stringify({
         type: "assistant",
         message: {
-          model: "claude-opus-4-7",
+          model: "claude-opus-4-8",
           usage: {
             input_tokens: 3,
             cache_creation_input_tokens: 9294,
@@ -2161,7 +2016,7 @@ describe("parseSessionUsage (Claude Code)", () => {
     const content = JSON.stringify({
       type: "assistant",
       message: {
-        model: "claude-opus-4-7",
+        model: "claude-opus-4-8",
         content: [{ type: "text", text: "hi" }],
       },
     });
@@ -2179,7 +2034,7 @@ describe("parseSessionUsage (Claude Code)", () => {
       JSON.stringify({
         type: "assistant",
         message: {
-          model: "claude-opus-4-7",
+          model: "claude-opus-4-8",
           usage: {
             input_tokens: 10,
             cache_creation_input_tokens: 20,
@@ -2217,12 +2072,12 @@ describe("parseSessionUsage (Claude Code)", () => {
 
 describe("captureSessions flag", () => {
   it("claudeCode defaults captureSessions to true", () => {
-    expect(claudeCode("claude-opus-4-7").captureSessions).toBe(true);
+    expect(claudeCode("claude-opus-4-8").captureSessions).toBe(true);
   });
 
   it("claudeCode allows opting out of captureSessions", () => {
     expect(
-      claudeCode("claude-opus-4-7", { captureSessions: false }).captureSessions,
+      claudeCode("claude-opus-4-8", { captureSessions: false }).captureSessions,
     ).toBe(false);
   });
 
@@ -2289,7 +2144,7 @@ describe("sessionStorage", () => {
   it("claudeCode hostSessionFilePath is derivable without capture", async () => {
     const dir = await mkdtemp(join(tmpdir(), "ralph-claude-hostpath-"));
     try {
-      const provider = claudeCode("claude-opus-4-7", {
+      const provider = claudeCode("claude-opus-4-8", {
         sessionStorage: { hostProjectsDir: dir },
       });
       // Path is purely a function of (cwd, id) — available before any capture.
@@ -2500,139 +2355,228 @@ describe("sessionStorage", () => {
       await rm(sandboxDir, { recursive: true, force: true });
     }
   });
-});
 
-// ---------------------------------------------------------------------------
-// pi credential provisioning — host auth.json / models-store.json into sandbox
-// ---------------------------------------------------------------------------
-
-describe("pi credential provisioning (provisionCredentials)", () => {
-  /** Bind-mount handle backed by the host filesystem (sandbox path == host path). */
-  const fsHandle = (): BindMountSandboxHandle => ({
-    worktreePath: "/workspace",
-    exec: async (command) => {
-      return new Promise((resolve) => {
-        nodeExec(command, (err, stdout, stderr) => {
-          resolve({
-            stdout: stdout.toString(),
-            stderr: stderr.toString(),
-            exitCode: err && typeof err.code === "number" ? err.code : 0,
-          });
-        });
-      });
-    },
-    copyFileIn: async (hostPath, sandboxPath) => {
-      await copyFile(hostPath, sandboxPath);
-    },
-    copyFileOut: async (sandboxPath, hostPath) => {
-      await copyFile(sandboxPath, hostPath);
-    },
-    close: async () => {},
-  });
-
-  it("transfers host auth.json and models-store.json into the sandbox agent dir", async () => {
-    const hostAgentDir = await mkdtemp(join(tmpdir(), "ralph-pi-cred-host-"));
-    const sandboxBase = await mkdtemp(join(tmpdir(), "ralph-pi-cred-sbx-"));
-    // The sandbox agent dir does not exist yet — the provisioner must mkdir -p it.
-    const sandboxAgentDir = join(sandboxBase, ".pi", "agent");
+  it("claudeCode captureToHost copies the main session when no subagents dir exists", async () => {
+    const hostDir = await mkdtemp(join(tmpdir(), "ralph-claude-sub-main-"));
+    const sandboxDir = await mkdtemp(join(tmpdir(), "ralph-claude-sub-sbx-"));
     try {
-      const authContent = JSON.stringify({
-        "openai-codex": { type: "oauth", access: "token-abc" },
-      });
-      const modelsContent = JSON.stringify({ models: [] });
-      await writeFile(join(hostAgentDir, "auth.json"), authContent);
-      await writeFile(join(hostAgentDir, "models-store.json"), modelsContent);
-
-      const provider = pi("openai-codex/gpt-5.6-terra", {
-        credentials: { hostAgentDir, sandboxAgentDir },
-      });
-      expect(provider.provisionCredentials).toBeDefined();
-
-      await provider.provisionCredentials!({ handle: fsHandle() });
-
-      expect(await readFile(join(sandboxAgentDir, "auth.json"), "utf-8")).toBe(
-        authContent,
-      );
-      expect(
-        await readFile(join(sandboxAgentDir, "models-store.json"), "utf-8"),
-      ).toBe(modelsContent);
-
-      // Host copy remains authoritative — unchanged by the transfer.
-      expect(await readFile(join(hostAgentDir, "auth.json"), "utf-8")).toBe(
-        authContent,
-      );
-      expect(
-        await readFile(join(hostAgentDir, "models-store.json"), "utf-8"),
-      ).toBe(modelsContent);
-    } finally {
-      await rm(hostAgentDir, { recursive: true, force: true });
-      await rm(sandboxBase, { recursive: true, force: true });
-    }
-  });
-
-  it("throws a typed error naming the missing host auth.json", async () => {
-    const hostAgentDir = await mkdtemp(join(tmpdir(), "ralph-pi-cred-miss-"));
-    const sandboxAgentDir = await mkdtemp(
-      join(tmpdir(), "ralph-pi-cred-miss2-"),
-    );
-    try {
-      // No auth.json on the host.
-      const provider = pi("zai-coding-cn/glm-5.3", {
-        credentials: { hostAgentDir, sandboxAgentDir },
-      });
-
-      const expectedPath = join(hostAgentDir, "auth.json");
-      await expect(
-        provider.provisionCredentials!({ handle: fsHandle() }),
-      ).rejects.toMatchObject({
-        _tag: "CredentialProvisionError",
-        hostPath: expectedPath,
-      });
-      // And the message names the missing host file too.
-      await expect(
-        provider.provisionCredentials!({ handle: fsHandle() }),
-      ).rejects.toThrow(expectedPath);
-    } finally {
-      await rm(hostAgentDir, { recursive: true, force: true });
-      await rm(sandboxAgentDir, { recursive: true, force: true });
-    }
-  });
-
-  it("skips models-store.json when absent on the host", async () => {
-    const hostAgentDir = await mkdtemp(join(tmpdir(), "ralph-pi-cred-nores-"));
-    const sandboxAgentDir = await mkdtemp(
-      join(tmpdir(), "ralph-pi-cred-nores2-"),
-    );
-    try {
+      const id = "session-only";
+      const hostCwd = "/host/repo";
+      const sandboxCwd = "/sandbox/repo";
+      const sandboxProjectDir = join(sandboxDir, "-sandbox-repo");
+      await mkdir(sandboxProjectDir, { recursive: true });
+      const sandboxMain = join(sandboxProjectDir, `${id}.jsonl`);
       await writeFile(
-        join(hostAgentDir, "auth.json"),
-        JSON.stringify({ "zai-coding-cn": { type: "oauth" } }),
+        sandboxMain,
+        JSON.stringify({ type: "system", cwd: sandboxCwd }),
       );
 
-      const provider = pi("zai-coding-cn/glm-5.3", {
-        credentials: { hostAgentDir, sandboxAgentDir },
+      const provider = claudeCode("claude-opus-4-8", {
+        sessionStorage: {
+          hostProjectsDir: hostDir,
+          sandboxProjectsDir: sandboxDir,
+        },
       });
 
-      // Resolves without error despite the missing catalog cache…
-      await provider.provisionCredentials!({ handle: fsHandle() });
+      await provider.sessionStorage!.captureToHost({
+        hostCwd,
+        sandboxCwd,
+        sessionId: id,
+        handle: fsBindMountHandle(),
+      });
 
-      // …and auth.json still landed in the sandbox.
-      expect(await readFile(join(sandboxAgentDir, "auth.json"), "utf-8")).toBe(
-        JSON.stringify({ "zai-coding-cn": { type: "oauth" } }),
-      );
+      const expectedHostPath = join(hostDir, "-host-repo", `${id}.jsonl`);
+      const main = await readFile(expectedHostPath, "utf-8");
+      expect(JSON.parse(main).cwd).toBe(hostCwd);
     } finally {
-      await rm(hostAgentDir, { recursive: true, force: true });
-      await rm(sandboxAgentDir, { recursive: true, force: true });
+      await rm(hostDir, { recursive: true, force: true });
+      await rm(sandboxDir, { recursive: true, force: true });
     }
   });
 
-  it("is only defined on the pi provider", () => {
-    expect(pi("m").provisionCredentials).toBeInstanceOf(Function);
-    expect(claudeCode("m").provisionCredentials).toBeUndefined();
-    expect(codex("m").provisionCredentials).toBeUndefined();
-    expect(cursor("m").provisionCredentials).toBeUndefined();
-    expect(opencode("m").provisionCredentials).toBeUndefined();
-    expect(copilot("m").provisionCredentials).toBeUndefined();
-    expect(minimax("m").provisionCredentials).toBeUndefined();
+  it("claudeCode captureToHost copies subagent/workflow logs alongside the main session with cwd rewritten", async () => {
+    const hostDir = await mkdtemp(join(tmpdir(), "ralph-claude-sub-many-"));
+    const sandboxDir = await mkdtemp(
+      join(tmpdir(), "ralph-claude-sub-many-sbx-"),
+    );
+    try {
+      const id = "session-with-subagents";
+      const hostCwd = "/host/repo";
+      const sandboxCwd = "/sandbox/repo";
+      const sandboxProjectDir = join(sandboxDir, "-sandbox-repo");
+      const sandboxSubagentsDir = join(sandboxProjectDir, id, "subagents");
+      await mkdir(sandboxSubagentsDir, { recursive: true });
+
+      // Main session
+      await writeFile(
+        join(sandboxProjectDir, `${id}.jsonl`),
+        JSON.stringify({ type: "system", cwd: sandboxCwd }),
+      );
+
+      // Two subagent transcripts (each line carries top-level cwd)
+      const alphaLines = [
+        JSON.stringify({ type: "system", cwd: sandboxCwd, agent: "alpha" }),
+        JSON.stringify({ type: "message", cwd: sandboxCwd, text: "a-msg" }),
+      ].join("\n");
+      const betaLines = [
+        JSON.stringify({ type: "system", cwd: sandboxCwd, agent: "beta" }),
+        JSON.stringify({ type: "message", cwd: sandboxCwd, text: "b-msg" }),
+      ].join("\n");
+      await writeFile(
+        join(sandboxSubagentsDir, "agent-alpha.jsonl"),
+        alphaLines,
+      );
+      await writeFile(join(sandboxSubagentsDir, "agent-beta.jsonl"), betaLines);
+
+      // A non-matching sibling — must NOT be copied to the host.
+      await writeFile(join(sandboxSubagentsDir, "notes.txt"), "ignore me");
+
+      const provider = claudeCode("claude-opus-4-8", {
+        sessionStorage: {
+          hostProjectsDir: hostDir,
+          sandboxProjectsDir: sandboxDir,
+        },
+      });
+
+      await provider.sessionStorage!.captureToHost({
+        hostCwd,
+        sandboxCwd,
+        sessionId: id,
+        handle: fsBindMountHandle(),
+      });
+
+      // Main session captured with cwd rewritten.
+      const mainContent = await readFile(
+        join(hostDir, "-host-repo", `${id}.jsonl`),
+        "utf-8",
+      );
+      expect(JSON.parse(mainContent).cwd).toBe(hostCwd);
+
+      // Both subagent transcripts captured with cwd rewritten on every line.
+      const hostSubagentsDir = join(hostDir, "-host-repo", id, "subagents");
+      const alpha = await readFile(
+        join(hostSubagentsDir, "agent-alpha.jsonl"),
+        "utf-8",
+      );
+      for (const line of alpha.split("\n")) {
+        expect(JSON.parse(line).cwd).toBe(hostCwd);
+      }
+      const beta = await readFile(
+        join(hostSubagentsDir, "agent-beta.jsonl"),
+        "utf-8",
+      );
+      for (const line of beta.split("\n")) {
+        expect(JSON.parse(line).cwd).toBe(hostCwd);
+      }
+
+      // The non-matching sibling must not have been copied.
+      await expect(
+        readFile(join(hostSubagentsDir, "notes.txt"), "utf-8"),
+      ).rejects.toThrow();
+    } finally {
+      await rm(hostDir, { recursive: true, force: true });
+      await rm(sandboxDir, { recursive: true, force: true });
+    }
+  });
+
+  it("claudeCode captureToHost: a failing subagent copy logs a warning and lets siblings + main session through", async () => {
+    const hostDir = await mkdtemp(join(tmpdir(), "ralph-claude-sub-fail-"));
+    const sandboxDir = await mkdtemp(
+      join(tmpdir(), "ralph-claude-sub-fail-sbx-"),
+    );
+    try {
+      const id = "session-flaky-sub";
+      const hostCwd = "/host/repo";
+      const sandboxCwd = "/sandbox/repo";
+      const sandboxProjectDir = join(sandboxDir, "-sandbox-repo");
+      const sandboxSubagentsDir = join(sandboxProjectDir, id, "subagents");
+      await mkdir(sandboxSubagentsDir, { recursive: true });
+
+      // Main session
+      await writeFile(
+        join(sandboxProjectDir, `${id}.jsonl`),
+        JSON.stringify({ type: "system", cwd: sandboxCwd }),
+      );
+      // Good subagent
+      await writeFile(
+        join(sandboxSubagentsDir, "agent-good.jsonl"),
+        JSON.stringify({ type: "system", cwd: sandboxCwd, agent: "good" }),
+      );
+      // Bad subagent: enumerated by find but fails on read (copyFileOut).
+      await writeFile(
+        join(sandboxSubagentsDir, "agent-bad.jsonl"),
+        JSON.stringify({ type: "system", cwd: sandboxCwd, agent: "bad" }),
+      );
+
+      // Spy: drop console.error so the test output stays clean and we can
+      // assert that exactly one warning was emitted.
+      const errors: string[] = [];
+      const originalError = console.error;
+      console.error = (msg: unknown, ...rest: unknown[]) => {
+        errors.push(
+          [msg, ...rest]
+            .map((v) => (v instanceof Error ? v.message : String(v)))
+            .join(" "),
+        );
+      };
+
+      try {
+        // Decorate the fs handle: make copyFileOut fail for the bad subagent.
+        const base = fsBindMountHandle();
+        const handle: BindMountSandboxHandle = {
+          ...base,
+          copyFileOut: async (sandboxPath, destPath) => {
+            if (sandboxPath.endsWith("agent-bad.jsonl")) {
+              throw new Error("simulated copyFileOut failure");
+            }
+            return base.copyFileOut(sandboxPath, destPath);
+          },
+        };
+
+        // Main capture must succeed; the bad subagent must not abort the run.
+        const provider = claudeCode("claude-opus-4-8", {
+          sessionStorage: {
+            hostProjectsDir: hostDir,
+            sandboxProjectsDir: sandboxDir,
+          },
+        });
+        await provider.sessionStorage!.captureToHost({
+          hostCwd,
+          sandboxCwd,
+          sessionId: id,
+          handle,
+        });
+      } finally {
+        console.error = originalError;
+      }
+
+      // Main session captured.
+      const mainContent = await readFile(
+        join(hostDir, "-host-repo", `${id}.jsonl`),
+        "utf-8",
+      );
+      expect(JSON.parse(mainContent).cwd).toBe(hostCwd);
+
+      // Good sibling captured.
+      const hostSubagentsDir = join(hostDir, "-host-repo", id, "subagents");
+      const good = await readFile(
+        join(hostSubagentsDir, "agent-good.jsonl"),
+        "utf-8",
+      );
+      expect(JSON.parse(good).cwd).toBe(hostCwd);
+
+      // Bad subagent NOT copied.
+      await expect(
+        readFile(join(hostSubagentsDir, "agent-bad.jsonl"), "utf-8"),
+      ).rejects.toThrow();
+
+      // Exactly one warning emitted, naming the bad path — successful
+      // siblings and the main session must not produce warnings of their own.
+      expect(errors).toHaveLength(1);
+      expect(errors[0]).toContain("agent-bad.jsonl");
+    } finally {
+      await rm(hostDir, { recursive: true, force: true });
+      await rm(sandboxDir, { recursive: true, force: true });
+    }
   });
 });

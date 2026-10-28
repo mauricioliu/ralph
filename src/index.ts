@@ -15,8 +15,10 @@ export type {
   Sandbox,
   SandboxRunOptions,
   SandboxRunResult,
+  ResumeSandboxRunResultOptions,
   SandboxInteractiveOptions,
   SandboxInteractiveResult,
+  SandboxExecOptions,
   CloseResult,
 } from "./createSandbox.js";
 export { createWorktree } from "./createWorktree.js";
@@ -50,6 +52,7 @@ export type {
   OutputStringDefinition,
 } from "./Output.js";
 export { CwdError } from "./CwdError.js";
+export { CredentialProvisionError } from "./CredentialProvisionError.js";
 export {
   claudeCode,
   codex,
@@ -80,6 +83,7 @@ export type {
   IsolatedSandboxProvider,
   NoSandboxProvider,
   BindMountSandboxHandle,
+  CredentialSandboxHandle,
   IsolatedSandboxHandle,
   NoSandboxHandle,
   InteractiveExecOptions,

@@ -652,7 +652,7 @@ describe("countCommitsToSync", () => {
         cwd: hostDir,
       });
 
-      const sandbox = makeSandboxFromHandle(handle);
+      const sandbox = makeSandboxFromHandle(handle, "isolated");
       const count = await Effect.runPromise(
         countCommitsToSync(sandbox, wp, hostHead.trim()),
       );
@@ -693,7 +693,7 @@ describe("countCommitsToSync", () => {
         cwd: hostDir,
       });
 
-      const sandbox = makeSandboxFromHandle(handle);
+      const sandbox = makeSandboxFromHandle(handle, "isolated");
       const count = await Effect.runPromise(
         countCommitsToSync(sandbox, wp, hostHead.trim()),
       );
@@ -724,7 +724,7 @@ describe("countCommitsToSync", () => {
 
       // Before any syncOut runs the ref is absent; hostHead is the correct
       // fallback because it still exists in the sandbox (sync-in copied it).
-      const sandbox = makeSandboxFromHandle(handle);
+      const sandbox = makeSandboxFromHandle(handle, "isolated");
       const count = await Effect.runPromise(
         countCommitsToSync(sandbox, wp, hostHead.trim()),
       );

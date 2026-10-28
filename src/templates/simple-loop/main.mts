@@ -12,10 +12,8 @@ await run({
   // Sandbox provider — runs the agent inside an isolated container.
   sandbox: docker(),
 
-  // The agent provider. Pass a model string to pi() — the worker model
-  // balances capability and speed for the lone agent that works the backlog.
-  // The ":high" suffix sets the thinking level inline; swap the model string
-  // here if this agent needs more (or less).
+  // The lone agent uses the worker model. Edit this string to customize it;
+  // the ":high" suffix sets Pi's thinking level inline.
   agent: pi("zai-coding-cn/glm-5.3:high"),
 
   // Path to the prompt file. Shell expressions inside are evaluated inside the

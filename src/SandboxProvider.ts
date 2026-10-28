@@ -1,3 +1,6 @@
+import { posix } from "node:path";
+import { CredentialProvisionError } from "./errors.js";
+
 /**
  * Sandbox provider types — the pluggable interface for sandbox runtimes.
  *
@@ -18,6 +21,8 @@ export interface InteractiveExecOptions {
   readonly stdout: NodeJS.WritableStream;
   readonly stderr: NodeJS.WritableStream;
   readonly cwd?: string;
+  /** Per-process environment overrides (host execution); sandbox adapters use POSIX env argv. */
+  readonly env?: Record<string, string>;
 }
 
 /** Handle to a running bind-mount sandbox. */
@@ -196,7 +201,7 @@ export interface NoSandboxHandle {
   /** Absolute path to the worktree on the host. */
   readonly worktreePath: string;
   /**
-   * Execute a command on the host.
+   * Execute a command on the host. `env` overrides apply to this process only.
    *
    * Implementations MUST support line-by-line streaming via `onLine`. This is
    * how Ralph delivers live feedback to the user and enforces idle timeouts —
@@ -212,6 +217,7 @@ export interface NoSandboxHandle {
       cwd?: string;
       sudo?: boolean;
       stdin?: string;
+      env?: Record<string, string>;
     },
   ): Promise<ExecResult>;
   /**
@@ -239,6 +245,95 @@ export interface NoSandboxProvider {
     readonly env: Record<string, string>;
   }) => Promise<NoSandboxHandle>;
 }
+
+/**
+ * Minimal, one-way capability for agent credential provisioning.
+ * Deliberately separate from session capture/resume (no sandbox→host copy).
+ */
+export interface CredentialSandboxHandle {
+  /** Use the same user and HOME as agent execution; sudo is only for explicit repair. */
+  exec: BindMountSandboxHandle["exec"];
+  /** Verify a physical directory is outside the worktree, with no symlink ancestors, before any writes or mode changes. */
+  validateDirectory(sandboxPath: string): Promise<void>;
+  /** Resolve only after the one-way file copy has settled, including on failure. */
+  copyFile(hostPath: string, sandboxPath: string): Promise<void>;
+}
+
+/** Normalize provider-family copy methods without exposing reverse copy. */
+export const toCredentialHandle = (
+  handle: BindMountSandboxHandle | IsolatedSandboxHandle | NoSandboxHandle,
+): CredentialSandboxHandle | undefined => {
+  if (typeof handle.exec !== "function") return undefined;
+  const checkDestination = (sandboxPath: string): void => {
+    const relative = posix.relative(handle.worktreePath, sandboxPath);
+    if (
+      relative === "" ||
+      (!relative.startsWith("../") &&
+        relative !== ".." &&
+        !posix.isAbsolute(relative))
+    ) {
+      throw new CredentialProvisionError({
+        message:
+          "Credential destination must be outside the sandbox worktree to avoid syncing secrets into host artifacts. Set credentials.sandboxAgentDir outside the worktree.",
+      });
+    }
+  };
+  const validateDirectory = async (sandboxPath: string): Promise<void> => {
+    checkDestination(sandboxPath);
+    const quote = (s: string): string => "'" + s.replace(/'/g, "'\\''") + "'";
+    try {
+      if (!posix.isAbsolute(sandboxPath) || /[\r\n\0]/.test(sandboxPath))
+        throw new Error("invalid path");
+      // No writes here. Walk even missing ancestors, rejecting symlinks and
+      // inaccessible existing directories. realpath must be available and succeed.
+      const result = await handle.exec(`set -e
+p=${quote(posix.resolve(sandboxPath))}
+while :; do
+  test ! -L "$p"
+  if test -e "$p"; then
+    test -d "$p"
+    test -x "$p"
+  fi
+  test "$p" != / || break
+  p=$(dirname -- "$p")
+done
+worktree=$(realpath -e -- ${quote(handle.worktreePath)})
+test -d "$worktree"
+destination=$(realpath -m -- ${quote(sandboxPath)})
+case "$destination" in "$worktree"|"$worktree"/*) exit 1;; esac`);
+      if (result.exitCode === 0) return;
+    } catch {
+      /* Transport output is deliberately discarded. */
+    }
+    throw new CredentialProvisionError({
+      message:
+        "Cannot verify credential directory outside the physical sandbox worktree without symlink ancestors. Check realpath/directory access or set credentials.sandboxAgentDir outside the worktree.",
+    });
+  };
+  if ("copyFileIn" in handle && typeof handle.copyFileIn === "function") {
+    return {
+      exec: (command, options) => handle.exec(command, options),
+      validateDirectory,
+      copyFile: async (hostPath, sandboxPath) => {
+        checkDestination(sandboxPath);
+        await validateDirectory(posix.dirname(sandboxPath));
+        await handle.copyFileIn(hostPath, sandboxPath);
+      },
+    };
+  }
+  if ("copyIn" in handle && typeof handle.copyIn === "function") {
+    return {
+      exec: (command, options) => handle.exec(command, options),
+      validateDirectory,
+      copyFile: async (hostPath, sandboxPath) => {
+        checkDestination(sandboxPath);
+        await validateDirectory(posix.dirname(sandboxPath));
+        await handle.copyIn(hostPath, sandboxPath);
+      },
+    };
+  }
+  return undefined;
+};
 
 // ---------- Branch strategy types ----------
 

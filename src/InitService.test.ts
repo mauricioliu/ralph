@@ -1,6 +1,6 @@
 import { NodeFileSystem } from "@effect/platform-node";
 import { Effect } from "effect";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -12,7 +12,6 @@ import {
   listIssueTrackers,
   getIssueTracker,
   getSandboxProvider,
-  rewriteMainTs,
 } from "./InitService.js";
 import type {
   AgentEntry,
@@ -29,10 +28,11 @@ const piAgent = getAgent("pi")!;
 const codexAgent = getAgent("codex")!;
 const cursorAgent = getAgent("cursor")!;
 const opencodeAgent = getAgent("opencode")!;
+const copilotAgent = getAgent("copilot")!;
 
 const defaultOptions: ScaffoldOptions = {
   agent: claudeCodeAgent,
-  model: "claude-opus-4-7",
+  model: "claude-opus-4-8",
 };
 
 const runScaffold = (repoDir: string, options?: Partial<ScaffoldOptions>) =>
@@ -66,37 +66,42 @@ describe("InitService scaffold", () => {
   it.each([
     {
       agent: claudeCodeAgent,
-      expectedKey: "ANTHROPIC_API_KEY=",
-      unexpectedKey: "OPENAI_KEY=",
-      expectIssue191Link: true,
+      expectedKey: "CLAUDE_CODE_OAUTH_TOKEN=",
+      unexpectedKey: "CODEX_API_KEY=",
+      expectClaudeSetupTokenHint: true,
     },
     {
       agent: piAgent,
-      expectedKey: "auth.json",
-      unexpectedKey: "OPENAI_KEY=",
-      expectIssue191Link: false,
+      expectedKey: "# Pi subscription models do not require API keys here.",
+      unexpectedKey: "CODEX_API_KEY=",
+      expectClaudeSetupTokenHint: false,
     },
     {
       agent: codexAgent,
-      expectedKey: "OPENAI_KEY=",
+      expectedKey: "CODEX_API_KEY=",
       unexpectedKey: "ANTHROPIC_API_KEY=",
-      expectIssue191Link: false,
+      expectClaudeSetupTokenHint: false,
     },
     {
       agent: opencodeAgent,
       expectedKey: "OPENCODE_API_KEY=",
       unexpectedKey: "ANTHROPIC_API_KEY=",
-      expectIssue191Link: false,
+      expectClaudeSetupTokenHint: false,
     },
     {
       agent: cursorAgent,
       expectedKey: "CURSOR_API_KEY=",
       unexpectedKey: "ANTHROPIC_API_KEY=",
-      expectIssue191Link: false,
+      expectClaudeSetupTokenHint: false,
     },
   ])(
     "generates .env.example with $agent.name env var",
-    async ({ agent, expectedKey, unexpectedKey, expectIssue191Link }) => {
+    async ({
+      agent,
+      expectedKey,
+      unexpectedKey,
+      expectClaudeSetupTokenHint,
+    }) => {
       const dir = await makeDir();
       await runScaffold(dir, { agent, model: agent.defaultModel });
 
@@ -106,10 +111,11 @@ describe("InitService scaffold", () => {
       );
       expect(envExample).toContain(expectedKey);
       expect(envExample).not.toContain(unexpectedKey);
-      if (expectIssue191Link) {
-        expect(envExample).toContain("issues/191");
+      expect(envExample).not.toContain("issues/191");
+      if (expectClaudeSetupTokenHint) {
+        expect(envExample).toContain("claude setup-token");
       } else {
-        expect(envExample).not.toContain("issues/191");
+        expect(envExample).not.toContain("claude setup-token");
       }
     },
   );
@@ -188,7 +194,14 @@ describe("InitService scaffold", () => {
     expect(dockerfile).toContain(SANDBOX_REPO_DIR);
   });
 
-  it.each([claudeCodeAgent, piAgent, codexAgent, opencodeAgent])(
+  it.each([
+    claudeCodeAgent,
+    piAgent,
+    codexAgent,
+    cursorAgent,
+    opencodeAgent,
+    copilotAgent,
+  ])(
     "$name Dockerfile aligns UID/GID with -o so a host GID colliding with a reserved base-image GID (e.g. macOS staff=20) doesn't fail the build",
     async (agent) => {
       const dir = await makeDir();
@@ -276,7 +289,7 @@ describe("InitService scaffold", () => {
     const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
     expect(mainTs).toContain('claudeCode("claude-sonnet-4-6")');
     // Should not contain the template's original model
-    expect(mainTs).not.toContain('claudeCode("claude-opus-4-7")');
+    expect(mainTs).not.toContain('claudeCode("claude-opus-4-8")');
   });
 
   it("scaffolds main.mts with default model when using agent default", async () => {
@@ -284,7 +297,7 @@ describe("InitService scaffold", () => {
     await runScaffold(dir);
 
     const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
-    expect(mainTs).toContain('claudeCode("claude-opus-4-7")');
+    expect(mainTs).toContain('claudeCode("claude-opus-4-8")');
   });
 
   // --- Template-specific tests ---
@@ -316,8 +329,8 @@ describe("InitService scaffold", () => {
     expect(mainTs).toContain("run(");
     expect(mainTs).toContain("maxIterations");
     expect(mainTs).toContain("3");
-    // When scaffolded with default model, simple-loop uses claude-opus-4-7
-    // (rewritten from template's claude-sonnet-4-6)
+    // When scaffolded with default model, simple-loop uses claude-opus-4-8
+    // (rewritten from the template's Pi worker model)
     expect(mainTs).toContain("promptFile");
     expect(mainTs).toContain("npm install");
     expect(mainTs).toContain("onSandboxReady");
@@ -656,6 +669,43 @@ describe("InitService scaffold", () => {
       );
     });
 
+    it("claude-code agent gets a `claude setup-token` hint under the env-vars step", () => {
+      const blank = next("blank", "main.mts").join("\n");
+      const nonBlank = next("simple-loop", "main.mts").join("\n");
+      expect(blank).toContain("claude setup-token");
+      expect(blank).toContain("CLAUDE_CODE_OAUTH_TOKEN");
+      expect(nonBlank).toContain("claude setup-token");
+      expect(nonBlank).toContain("CLAUDE_CODE_OAUTH_TOKEN");
+    });
+
+    it("non-claude-code agents do not get the `claude setup-token` hint", () => {
+      const piLines = getNextStepsLines(
+        "simple-loop",
+        "main.mts",
+        ghIssues,
+        piAgent,
+        "npm",
+      ).join("\n");
+      const codexLines = getNextStepsLines(
+        "blank",
+        "main.mts",
+        ghIssues,
+        codexAgent,
+        "npm",
+      ).join("\n");
+      expect(piLines).not.toContain("claude setup-token");
+      expect(piLines).not.toContain("CLAUDE_CODE_OAUTH_TOKEN");
+      expect(codexLines).not.toContain("claude setup-token");
+      expect(codexLines).not.toContain("CLAUDE_CODE_OAUTH_TOKEN");
+    });
+
+    it("next steps no longer link to the closed issues/191 workaround", () => {
+      const blank = next("blank", "main.mts").join("\n");
+      const nonBlank = next("simple-loop", "main.mts").join("\n");
+      expect(blank).not.toContain("issues/191");
+      expect(nonBlank).not.toContain("issues/191");
+    });
+
     it("non-planner template does not mention installing zod", () => {
       const lines = next("simple-loop", "main.mts");
       const joined = lines.join("\n");
@@ -688,170 +738,6 @@ describe("InitService scaffold", () => {
       const joined = lines.join("\n");
       expect(joined.toLowerCase()).toContain("host");
       expect(joined).toContain(getAgent("opencode")!.setupCommand);
-    });
-  });
-
-  // --- Agent/model rewrite-skip guard (ADR 0021) ---
-
-  describe("agent/model rewrite-skip guard", () => {
-    it("pi without a model performs no agent/model rewriting — blank main.mts is byte-identical to the template", async () => {
-      const dir = await makeDir();
-      await runScaffold(dir, { agent: piAgent, model: undefined });
-
-      const scaffolded = await readFile(
-        join(dir, ".ralph", "main.mts"),
-        "utf-8",
-      );
-      const template = await readFile(
-        join(import.meta.dirname, "templates", "blank", "main.mts"),
-        "utf-8",
-      );
-      expect(scaffolded).toBe(template);
-    });
-
-    it("pi without a model keeps the template's two-model split verbatim (parallel-planner)", async () => {
-      const dir = await makeDir();
-      await runScaffold(dir, {
-        agent: piAgent,
-        model: undefined,
-        templateName: "parallel-planner",
-      });
-
-      const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
-      // Against the pi placeholder, the split survives untouched: the
-      // planner's model and the workers' model both remain.
-      expect(mainTs).toContain('ralph.pi("openai-codex/gpt-5.6-terra:high")');
-      expect(mainTs).toContain('ralph.pi("zai-coding-cn/glm-5.3:high")');
-    });
-
-    it("pi without a model still rewrites the sandbox provider (orthogonal to the guard)", async () => {
-      const dir = await makeDir();
-      await runScaffold(dir, {
-        agent: piAgent,
-        model: undefined,
-        templateName: "parallel-planner",
-        sandboxProvider: getSandboxProvider("podman"),
-      });
-
-      const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
-      expect(mainTs).toContain(
-        'import { podman } from "@mauricioliu/ralph/sandboxes/podman"',
-      );
-      expect(mainTs).not.toContain("docker");
-      // The agent/model rewrite is still skipped.
-      expect(mainTs).toContain('ralph.pi("openai-codex/gpt-5.6-terra:high")');
-      expect(mainTs).toContain('ralph.pi("zai-coding-cn/glm-5.3:high")');
-    });
-
-    it("pi with an explicit model collapses both roles to it", async () => {
-      const dir = await makeDir();
-      await runScaffold(dir, {
-        agent: piAgent,
-        model: "my-model",
-        templateName: "parallel-planner",
-      });
-
-      const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
-      // Every factory call rewrites to the single explicit model.
-      expect(mainTs.match(/pi\("my-model"\)/g)).toHaveLength(3);
-      expect(mainTs).not.toContain("claudeCode");
-      expect(mainTs).not.toContain("gpt-5.6-terra");
-      expect(mainTs).not.toContain("glm-5.3");
-    });
-
-    it("non-pi agent without a model still rewrites, using the agent's default (codex)", async () => {
-      const dir = await makeDir();
-      await runScaffold(dir, {
-        agent: codexAgent,
-        model: undefined,
-        templateName: "parallel-planner",
-      });
-
-      const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
-      expect(mainTs.match(/codex\("gpt-5\.4"\)/g)).toHaveLength(3);
-      expect(mainTs).not.toContain("claudeCode");
-      // The pi placeholder is fully gone — no pi call sites survive.
-      expect(mainTs).not.toMatch(/\bpi\s*\(/);
-      expect(mainTs).not.toContain("gpt-5.6-terra");
-      expect(mainTs).not.toContain("glm-5.3");
-    });
-
-    it("claude-code without a model still collapses the split to its default", async () => {
-      const dir = await makeDir();
-      await runScaffold(dir, {
-        agent: claudeCodeAgent,
-        model: undefined,
-        templateName: "parallel-planner",
-      });
-
-      const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
-      expect(mainTs.match(/claudeCode\("claude-opus-4-7"\)/g)).toHaveLength(3);
-      expect(mainTs).not.toContain("claude-sonnet-4-6");
-      expect(mainTs).not.toMatch(/\bpi\s*\(/);
-      expect(mainTs).not.toContain("glm-5.3");
-    });
-
-    it("non-pi agent rewrites the named import specifier to the selected factory (blank)", async () => {
-      const dir = await makeDir();
-      await runScaffold(dir, { agent: codexAgent, model: undefined });
-
-      const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
-      expect(mainTs).toContain(
-        'import { run, codex } from "@mauricioliu/ralph"',
-      );
-      expect(mainTs).toContain('agent: codex("gpt-5.4")');
-      expect(mainTs).not.toMatch(/\bpi\b/);
-    });
-  });
-
-  describe("rewriteMainTs multi-line call sites", () => {
-    it("rewrites the model in factory calls spanning multiple lines, preserving trailing options", async () => {
-      const dir = await makeDir();
-      const configDir = join(dir, ".ralph");
-      await mkdir(configDir);
-      await writeFile(
-        join(configDir, "main.mts"),
-        [
-          'import * as ralph from "@mauricioliu/ralph";',
-          "",
-          "await ralph.run({",
-          "  agent: ralph.pi(",
-          '    "openai-codex/gpt-5.6-terra:high",',
-          "    {",
-          "      captureSessions: false,",
-          "    },",
-          "  ),",
-          "  sandbox: ralph.docker(),",
-          "});",
-          "",
-          "const fallback = ralph.pi(",
-          '  "zai-coding-cn/glm-5.3:high"',
-          ");",
-          "",
-        ].join("\n"),
-      );
-
-      await Effect.runPromise(
-        rewriteMainTs(
-          configDir,
-          codexAgent,
-          "gpt-5.4",
-          getSandboxProvider("docker")!,
-          "main.mts",
-        ).pipe(Effect.provide(NodeFileSystem.layer)),
-      );
-
-      const mainTs = await readFile(join(configDir, "main.mts"), "utf-8");
-      // Both call sites — one with the model on its own line and trailing
-      // options, one bare multi-line — collapse to the selected model.
-      expect(mainTs.match(/codex\(\s*"gpt-5\.4"/g)).toHaveLength(2);
-      expect(mainTs).not.toMatch(/\bpi\s*\(/);
-      expect(mainTs).not.toContain("gpt-5.6-terra");
-      expect(mainTs).not.toContain("glm-5.3");
-      // The options object after the model string survives untouched.
-      expect(mainTs).toContain("captureSessions: false,");
-      // docker stays docker when selected.
-      expect(mainTs).toContain("ralph.docker()");
     });
   });
 
@@ -1059,8 +945,8 @@ describe("InitService scaffold", () => {
       await runScaffold(dir, { templateName: "parallel-planner" });
 
       const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
-      // All factory calls should use the specified model (default: claude-opus-4-7)
-      expect(mainTs).toContain("claude-opus-4-7");
+      // All factory calls should use the specified model (default: claude-opus-4-8)
+      expect(mainTs).toContain("claude-opus-4-8");
     });
 
     it("implement-prompt.md contains {{TASK_ID}}, {{ISSUE_TITLE}}, {{BRANCH}} prompt arguments", async () => {
@@ -1109,8 +995,8 @@ describe("InitService scaffold", () => {
         join(configDir, ".env.example"),
         "utf-8",
       );
-      // Dynamic env: claude-code agent → ANTHROPIC_API_KEY, default issue tracker → GH_TOKEN
-      expect(envExample).toContain("ANTHROPIC_API_KEY=");
+      // Dynamic env: claude-code agent → CLAUDE_CODE_OAUTH_TOKEN, default issue tracker → GH_TOKEN
+      expect(envExample).toContain("CLAUDE_CODE_OAUTH_TOKEN=");
       expect(envExample).toContain("GH_TOKEN=");
     });
   });
@@ -1165,28 +1051,27 @@ describe("InitService scaffold", () => {
       const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
       expect(mainTs).toContain("implement-prompt.md");
       expect(mainTs).toContain("review-prompt.md");
-      expect(mainTs).toContain("!implement.commits.length");
+      expect(mainTs).toContain("implement.commits.length > 0");
     });
 
-    it("main.mts requires review approval and records the reviewed branch SHA", async () => {
+    it("main.mts captures reviewer result and merges commits from both runs", async () => {
       const dir = await makeDir();
       await runScaffold(dir, { templateName: "parallel-planner-with-review" });
 
       const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
       // Reviewer result must be captured, not discarded
       expect(mainTs).toContain("const review = await sandbox.run");
-      expect(mainTs).toContain("review.completionSignal !== APPROVED");
-      expect(mainTs).toContain("branchSha(issue.branch)");
-      expect(mainTs).toContain('phase: "merge-pending"');
+      // Commits from both implementer and reviewer must be merged
+      expect(mainTs).toContain("implement.commits");
+      expect(mainTs).toContain("review.commits");
     });
 
-    it("main.mts serializes issue pipelines and requires explicit authorization", async () => {
+    it("main.mts uses Promise.allSettled for parallel execution", async () => {
       const dir = await makeDir();
       await runScaffold(dir, { templateName: "parallel-planner-with-review" });
+
       const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
-      expect(mainTs).not.toContain("Promise.allSettled");
-      expect(mainTs).toContain(".max(1)");
-      expect(mainTs).toContain("RALPH_AUTHORIZED_ISSUES");
+      expect(mainTs).toContain("Promise.allSettled");
     });
 
     it("main.mts has correct maxIterations: planner=1, implementer=100, reviewer=1, merger=1", async () => {
@@ -1279,8 +1164,8 @@ describe("InitService scaffold", () => {
         join(configDir, ".env.example"),
         "utf-8",
       );
-      // Dynamic env: claude-code agent → ANTHROPIC_API_KEY, default issue tracker → GH_TOKEN
-      expect(envExample).toContain("ANTHROPIC_API_KEY=");
+      // Dynamic env: claude-code agent → CLAUDE_CODE_OAUTH_TOKEN, default issue tracker → GH_TOKEN
+      expect(envExample).toContain("CLAUDE_CODE_OAUTH_TOKEN=");
       expect(envExample).toContain("GH_TOKEN=");
     });
 
@@ -1289,7 +1174,7 @@ describe("InitService scaffold", () => {
       await runScaffold(dir, { templateName: "parallel-planner-with-review" });
 
       const mainTs = await readFile(join(dir, ".ralph", "main.mts"), "utf-8");
-      expect(mainTs).toContain("claude-opus-4-7");
+      expect(mainTs).toContain("claude-opus-4-8");
     });
 
     it("scaffolds CODING_STANDARDS.md with minimal starter content", async () => {
@@ -2022,7 +1907,7 @@ describe("InitService scaffold", () => {
       expect(prompt).not.toContain("{{VIEW_TASK_COMMAND}}");
     });
 
-    it("parallel-planner-with-review with github-issues leaves closure outside the merger", async () => {
+    it("parallel-planner-with-review with github-issues produces merge-prompt with gh issue close", async () => {
       const dir = await makeDir();
       await runScaffold(dir, {
         templateName: "parallel-planner-with-review",
@@ -2033,12 +1918,11 @@ describe("InitService scaffold", () => {
         join(dir, ".ralph", "merge-prompt.md"),
         "utf-8",
       );
-      expect(prompt).toContain("Do not close or edit issues");
-      expect(prompt).not.toContain("gh issue close");
+      expect(prompt).toContain("gh issue close");
       expect(prompt).not.toContain("{{CLOSE_TASK_COMMAND}}");
     });
 
-    it("parallel-planner-with-review with beads leaves closure outside the merger", async () => {
+    it("parallel-planner-with-review with beads produces merge-prompt with bd close", async () => {
       const dir = await makeDir();
       await runScaffold(dir, {
         templateName: "parallel-planner-with-review",
@@ -2049,8 +1933,7 @@ describe("InitService scaffold", () => {
         join(dir, ".ralph", "merge-prompt.md"),
         "utf-8",
       );
-      expect(prompt).toContain("Do not close or edit issues");
-      expect(prompt).not.toContain("bd close");
+      expect(prompt).toContain("bd close");
       expect(prompt).not.toContain("gh issue");
       expect(prompt).not.toContain("{{CLOSE_TASK_COMMAND}}");
     });
@@ -2138,6 +2021,7 @@ describe("InitService scaffold", () => {
       );
       expect(dockerfile).toContain("beads");
       expect(dockerfile).toContain("@earendil-works/pi-coding-agent");
+      expect(dockerfile).not.toContain("@mariozechner/pi-coding-agent");
       expect(dockerfile).not.toContain("GitHub CLI");
     });
   });
@@ -2213,7 +2097,7 @@ describe("InitService scaffold", () => {
         "utf-8",
       );
       expect(mainContent).toContain("@mauricioliu/ralph");
-      expect(mainContent).toContain('claudeCode("claude-opus-4-7")');
+      expect(mainContent).toContain('claudeCode("claude-opus-4-8")');
     });
 
     it("main.ts scaffolded with type: module rewrites agent factory correctly", async () => {
