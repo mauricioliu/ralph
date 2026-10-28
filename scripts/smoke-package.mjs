@@ -129,6 +129,25 @@ try {
   assert(help.includes("ralph"));
   assert(!help.includes("sandcastle"));
 
+  // Execute only synthetic entry points, never a generated agent workflow.
+  for (const extension of ["ts", "mts"]) {
+    const cwd = join(fixture, `run-${extension}`);
+    await mkdir(join(cwd, ".ralph"), { recursive: true });
+    await writeFile(
+      join(cwd, "package.json"),
+      JSON.stringify({ type: extension === "ts" ? "module" : "commonjs" }),
+    );
+    await writeFile(
+      join(cwd, `.ralph/main.${extension}`),
+      'const value: string = "PACKAGED_RUN_OK"; console.log(value);',
+    );
+    assert(
+      exec(process.execPath, [installedBin, "run"], cwd).includes(
+        "PACKAGED_RUN_OK",
+      ),
+    );
+  }
+
   const runtimeExports = [
     "run",
     "interactive",

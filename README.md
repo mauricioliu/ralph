@@ -49,11 +49,15 @@ npx @mauricioliu/ralph init
 cp .ralph/.env.example .ralph/.env
 ```
 
-4. Run the `.ralph/main.ts` (or `main.mts`) file with `npx tsx`
+4. Run the generated entry point:
 
 ```bash
-npx tsx .ralph/main.ts
+npx @mauricioliu/ralph run
 ```
+
+With a global install or `npm link`, use `ralph run`. It runs the unique
+`.ralph/main.ts` or `.ralph/main.mts` in the current project with the included
+TypeScript runtime. Direct execution with `npx tsx .ralph/main.ts` remains supported.
 
 ```typescript
 // 4. Run the agent via the JS API
@@ -817,6 +821,24 @@ Creates the following files:
 ```
 
 Errors if `.ralph/` already exists to prevent overwriting customizations.
+
+### `ralph run`
+
+Runs `.ralph/main.ts` or `.ralph/main.mts` from the current directory. No arguments
+or extra flags are required. Ralph includes its TypeScript runtime, inherits the
+terminal streams and environment, forwards SIGINT/SIGTERM, and preserves the entry
+point's exit code. Missing or ambiguous entry points fail before execution: run
+`ralph init` if neither exists; keep only the intended file if both exist.
+
+```bash
+ralph run
+# Without a global install:
+npx @mauricioliu/ralph run
+```
+
+This launches the configured workflow as written; it adds no sandbox, authorization
+filter or merge restriction of its own. It is distinct from this repository's
+`npm run ralph` development script, which runs `.ralph/run.ts`.
 
 ### `ralph docker build-image`
 

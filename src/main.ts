@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { NodeContext, NodeRuntime } from "@effect/platform-node";
+import { Runtime } from "@effect/platform";
 import { Effect, Layer } from "effect";
 import { cli } from "./cli.js";
 import { ClackDisplay } from "./Display.js";
@@ -18,5 +19,14 @@ const mainLayer = Layer.merge(NodeContext.layer, ClackDisplay.layer);
 cli(process.argv).pipe(
   withFriendlyErrors,
   Effect.provide(mainLayer),
-  NodeRuntime.runMain,
+  NodeRuntime.runMain({
+    // A signalled `ralph run` waits for its child and sets the actual exit code.
+    // Preserve that explicit status instead of replacing interruption with 0.
+    teardown: (exit, onExit) =>
+      Runtime.defaultTeardown(exit, (code) =>
+        onExit(
+          process.exitCode === undefined ? code : Number(process.exitCode),
+        ),
+      ),
+  }),
 );

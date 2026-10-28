@@ -35,6 +35,7 @@ import type {
 } from "./InitService.js";
 import { ConfigDirError, InitError } from "./errors.js";
 import { VERSION } from "./version.js";
+import { runMain } from "./runMain.js";
 
 // --- Shared options ---
 
@@ -679,6 +680,12 @@ const podmanCommand = Command.make("podman", {}, () =>
   Command.withSubcommands([podmanBuildImageCommand, podmanRemoveImageCommand]),
 );
 
+const runCommand = Command.make("run", {}, () => runMain(process.cwd())).pipe(
+  Command.withDescription(
+    "Run .ralph/main.ts or .ralph/main.mts in the current project",
+  ),
+);
+
 // --- Root command ---
 
 const rootCommand = Command.make("ralph", {}, () =>
@@ -690,7 +697,12 @@ const rootCommand = Command.make("ralph", {}, () =>
 );
 
 export const ralph = rootCommand.pipe(
-  Command.withSubcommands([initCommand, dockerCommand, podmanCommand]),
+  Command.withSubcommands([
+    initCommand,
+    runCommand,
+    dockerCommand,
+    podmanCommand,
+  ]),
 );
 
 export const cli = Command.run(ralph, {
