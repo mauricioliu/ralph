@@ -13,6 +13,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Effect } from "effect";
+import { syncIn } from "./syncIn.js";
 import { pi } from "./AgentProvider.js";
 import { provisionAgentCredentials } from "./CredentialProvision.js";
 import {
@@ -69,7 +71,11 @@ describe.each(["vercel", "daytona"] as const)(
       failChown = false;
       remove = vi.fn(async () => {});
       download = vi.fn();
-      const command = async (cmd: string, privileged = false) => {
+      const command = async (
+        cmd: string,
+        privileged = false,
+        cwd = workspace,
+      ) => {
         sudo.push(privileged);
         // Simulate SDK upload ownership without requiring root on the host.
         if (nonOwner && cmd.startsWith("test -O"))
@@ -82,7 +88,7 @@ describe.each(["vercel", "daytona"] as const)(
         try {
           return {
             ...(await exec("sh", ["-c", cmd], {
-              cwd: workspace,
+              cwd,
               env: {
                 ...process.env,
                 PI_CODING_AGENT_DIR: "",
@@ -128,11 +134,15 @@ describe.each(["vercel", "daytona"] as const)(
           getWorkDir: async () => home,
           getUserHomeDir: async () => home,
           process: {
-            executeCommand: vi.fn(async (cmd: string) => {
+            executeCommand: vi.fn(async (cmd: string, cwd: string) => {
+              // SDK cwd is not advisory: a fresh child must exist before exec.
+              if (!(await stat(cwd)).isDirectory())
+                throw new Error("ENOENT cwd");
               const privileged = cmd.startsWith("sudo ");
               const r = await command(
                 privileged ? cmd.slice(5) : cmd,
                 privileged,
+                cwd,
               );
               return { result: r.stdout, exitCode: r.exitCode };
             }),
@@ -180,6 +190,53 @@ describe.each(["vercel", "daytona"] as const)(
         credentialHandle: toCredentialHandle(handle),
       });
     };
+    it.each([false, true])(
+      "deletes a Daytona sandbox after initialization failure (delete fails: %s) without raw SDK output",
+      async (deleteFails) => {
+        if (name !== "daytona") return;
+        sdk.daytonaCreate.mockResolvedValue({
+          getWorkDir: async () => home,
+          process: {
+            executeCommand: async () => {
+              throw new Error(AUTH);
+            },
+          },
+        });
+        if (deleteFails) sdk.daytonaDelete.mockRejectedValue(new Error(AUTH));
+        await expect(create()).rejects.toMatchObject({
+          _tag: "ExecError",
+          message: deleteFails
+            ? expect.stringContaining("remove it before retrying")
+            : expect.stringContaining("sandbox deleted"),
+        });
+        expect(sdk.daytonaDelete).toHaveBeenCalledOnce();
+      },
+    );
+    it("bootstraps a fresh Daytona worktree through syncIn before credentials", async () => {
+      if (name !== "daytona") return;
+      home = join(root, "fresh-home");
+      await mkdir(home);
+      await exec("git", ["init", "-b", "main", host]);
+      await exec("git", ["-C", host, "add", "auth.json"]);
+      await exec("git", [
+        "-C",
+        host,
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "commit",
+        "-m",
+        "synthetic",
+      ]);
+      const created = await create({ PI_CODING_AGENT_DIR: "" });
+      await Effect.runPromise(syncIn(host, created));
+      expect(
+        (await created.exec("git rev-parse --abbrev-ref HEAD")).stdout.trim(),
+      ).toBe("main");
+      await provision();
+      expect(await readdir(created.worktreePath)).not.toContain(".pi");
+    });
     it("discovers the normal exec user's HOME, uploads only auth, verifies modes and never downloads", async () => {
       // Do not let a template override mask the runtime HOME test.
       if (name === "daytona") await create({ PI_CODING_AGENT_DIR: "" });

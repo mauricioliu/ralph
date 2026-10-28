@@ -14,6 +14,9 @@ import {
   type IsolatedSandboxProvider,
 } from "../SandboxProvider.js";
 import { BoundedTail, MAX_TAIL_CHARS } from "../boundedTail.js";
+import { ExecError } from "../errors.js";
+
+const quote = (s: string): string => "'" + s.replace(/'/g, "'\\''") + "'";
 
 import type {
   Daytona as DaytonaClient,
@@ -102,12 +105,31 @@ export const daytona = (options?: DaytonaOptions): IsolatedSandboxProvider =>
 
       // The SDK work dir may be HOME itself. Keep the synced repository in
       // a child so HOME/.pi credentials never become untracked sync artifacts.
-      const worktreePath = posix.join(
-        (await sandbox.getWorkDir()) ??
+      let worktreePath: string;
+      try {
+        const base =
+          (await sandbox.getWorkDir()) ??
           (await sandbox.getUserHomeDir()) ??
-          "/home/daytona",
-        "ralph-workspace",
-      );
+          "/home/daytona";
+        worktreePath = posix.join(base, "ralph-workspace");
+        const result = await sandbox.process.executeCommand(
+          `mkdir -p -- ${quote(worktreePath)} && test -d ${quote(worktreePath)}`,
+          base,
+        );
+        if (result.exitCode !== 0)
+          throw new Error("workspace initialization failed");
+      } catch {
+        let cleaned = true;
+        await client.delete(sandbox).catch(() => {
+          cleaned = false;
+        });
+        throw new ExecError({
+          command: "initialize Daytona worktree",
+          message: cleaned
+            ? "Could not initialize Daytona worktree; sandbox deleted."
+            : "Could not initialize Daytona worktree or delete sandbox; remove it before retrying.",
+        });
+      }
 
       return {
         worktreePath,
