@@ -12,8 +12,11 @@ const doubles = vi.hoisted(() => ({
   execSync: vi.fn(() => {
     throw new Error("Unexpected host command during init test");
   }),
-  buildImage: vi.fn(() => {
-    throw new Error("Unexpected image build during init test");
+  execFile: vi.fn((..._args: unknown[]) => {
+    throw new Error("Unexpected external executable during init test");
+  }),
+  otherProcess: vi.fn(() => {
+    throw new Error("Unexpected process API during init test");
   }),
 }));
 vi.mock("@clack/prompts", async (importOriginal) => ({
@@ -25,14 +28,12 @@ vi.mock("@clack/prompts", async (importOriginal) => ({
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   execSync: doubles.execSync,
-}));
-vi.mock("./DockerLifecycle.js", () => ({
-  buildImage: doubles.buildImage,
-  removeImage: vi.fn(),
-}));
-vi.mock("./PodmanLifecycle.js", () => ({
-  buildImage: doubles.buildImage,
-  removeImage: vi.fn(),
+  execFile: doubles.execFile,
+  exec: doubles.otherProcess,
+  execFileSync: doubles.otherProcess,
+  spawn: doubles.otherProcess,
+  spawnSync: doubles.otherProcess,
+  fork: doubles.otherProcess,
 }));
 
 import { cli } from "./cli.js";
@@ -87,7 +88,7 @@ describe("interactive init with prompt and process doubles", () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  async function runInit(args: string[] = []) {
+  async function runInit(args: string[] = [], expectedBuild?: string) {
     const entries = Ref.unsafeMake<ReadonlyArray<DisplayEntry>>([]);
     await Effect.runPromise(
       cli(["node", "ralph", "init", ...args]).pipe(
@@ -96,11 +97,24 @@ describe("interactive init with prompt and process doubles", () => {
       ),
     );
     expect(doubles.execSync).not.toHaveBeenCalled();
-    expect(doubles.buildImage).not.toHaveBeenCalled();
+    expect(doubles.otherProcess).not.toHaveBeenCalled();
+    if (expectedBuild === undefined)
+      expect(doubles.execFile).not.toHaveBeenCalled();
+    else {
+      expect(doubles.execFile).toHaveBeenCalledOnce();
+      const [executable, argv] = doubles.execFile.mock.calls[0]!;
+      expect(executable).toBe(expectedBuild);
+      expect((argv as string[]).slice(0, 3)).toEqual([
+        "build",
+        "-t",
+        "synthetic-init-image",
+      ]);
+      expect((argv as string[]).at(-1)).toBe(join(dir, ".ralph"));
+    }
     return {
       source: await readFile(join(dir, ".ralph", "main.mts"), "utf8"),
       output: (await Effect.runPromise(Ref.get(entries)))
-        .filter((entry) => entry._tag === "text")
+        .filter((entry) => entry._tag === "text" || entry._tag === "status")
         .map((entry) => entry.message)
         .join("\n"),
     };
@@ -196,11 +210,71 @@ describe("interactive init with prompt and process doubles", () => {
     },
   );
 
+  it.each(["docker", "podman"])(
+    "honors an approved %s build through the external process boundary",
+    async (sandbox) => {
+      doubles.execFile.mockImplementationOnce((...args) => {
+        const callback = args.at(-1) as (
+          error: null,
+          stdout: string,
+          stderr: string,
+        ) => void;
+        callback(null, "synthetic build completed", "");
+      });
+      const { output } = await runInit(
+        [
+          "--sandbox",
+          sandbox,
+          "--build-image",
+          "true",
+          "--image-name",
+          "synthetic-init-image",
+        ],
+        sandbox,
+      );
+      expect(output).toContain("Image built successfully");
+    },
+  );
+
+  it.each(["docker", "podman"])(
+    "declining %s build keeps scaffolding but launches no process",
+    async (sandbox) => {
+      const { output } = await runInit(["--sandbox", sandbox]);
+      expect(output).toContain(`ralph ${sandbox} build-image`);
+      expect(output).not.toContain("Image built successfully");
+    },
+  );
+
+  it.each(["docker", "podman"])(
+    "reports an external %s build failure rather than claiming success",
+    async (sandbox) => {
+      doubles.execFile.mockImplementationOnce((...args) => {
+        const callback = args.at(-1) as (
+          error: Error,
+          stdout: string,
+          stderr: string,
+        ) => void;
+        callback(
+          new Error("synthetic build rejected"),
+          "",
+          "synthetic build rejected",
+        );
+      });
+      await expect(
+        runInit(["--sandbox", sandbox, "--build-image", "true"]),
+      ).rejects.toThrow("synthetic build rejected");
+      expect(doubles.execFile).toHaveBeenCalledOnce();
+      expect(doubles.execSync).not.toHaveBeenCalled();
+      expect(doubles.otherProcess).not.toHaveBeenCalled();
+    },
+  );
+
   it("cancelling the agent picker does not scaffold or launch anything", async () => {
     doubles.select.mockResolvedValueOnce(doubles.cancel);
     await expect(runInit()).rejects.toThrow("Agent selection cancelled");
     expect(await readdir(dir)).toEqual([]);
     expect(doubles.execSync).not.toHaveBeenCalled();
-    expect(doubles.buildImage).not.toHaveBeenCalled();
+    expect(doubles.execFile).not.toHaveBeenCalled();
+    expect(doubles.otherProcess).not.toHaveBeenCalled();
   });
 });
