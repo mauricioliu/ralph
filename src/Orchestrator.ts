@@ -41,7 +41,9 @@ const invokeAgent = (
   SandboxError
 > =>
   Effect.gen(function* () {
-    let resultText = "";
+    let resultText: string | undefined;
+    let streamError: string | undefined;
+    let canRecoverStreamError = false;
     let sessionId: string | undefined;
     let usage: IterationUsage | undefined;
     // Accumulated text/result output, scanned for the completion signal so a
@@ -50,7 +52,10 @@ const invokeAgent = (
     let accumulatedOutput = "";
 
     // Deferred that fails when the idle timer fires (no signal seen).
-    const timeoutSignal = yield* Deferred.make<never, AgentIdleTimeoutError>();
+    const timeoutSignal = yield* Deferred.make<
+      never,
+      AgentIdleTimeoutError | AgentError
+    >();
     // Deferred that resolves successfully when the completion-grace timer
     // fires (signal seen but process hasn't exited). Resolving lets the race
     // hand control back to the orchestrator with the buffered output, which
@@ -95,7 +100,9 @@ const invokeAgent = (
             yield* Effect.sleep(Duration.millis(completionTimeoutMs));
             onCompletionTimeout(completionTimeoutMs);
             yield* Deferred.succeed(completionTimeoutDeferred, {
-              result: resultText || accumulatedOutput,
+              result: provider.parsedOutputOnly
+                ? (resultText ?? accumulatedOutput)
+                : resultText || accumulatedOutput,
               sessionId,
               usage,
             });
@@ -108,10 +115,14 @@ const invokeAgent = (
             yield* Effect.sleep(Duration.millis(idleTimeoutMs));
             yield* Deferred.fail(
               timeoutSignal,
-              new AgentIdleTimeoutError({
-                message: `Agent idle for ${idleTimeoutMs / 1000} seconds — no output received. Consider increasing the idle timeout with --idle-timeout.`,
-                timeoutMs: idleTimeoutMs,
-              }),
+              streamError !== undefined
+                ? new AgentError({
+                    message: `${provider.name} failed: ${streamError}`,
+                  })
+                : new AgentIdleTimeoutError({
+                    message: `Agent idle for ${idleTimeoutMs / 1000} seconds — no output received. Consider increasing the idle timeout with --idle-timeout.`,
+                    timeoutMs: idleTimeoutMs,
+                  }),
             );
           }),
         );
@@ -161,8 +172,27 @@ const invokeAgent = (
               onText(parsed.text);
               accumulatedOutput += parsed.text;
             } else if (parsed.type === "result") {
+              // agent_end can repeat a previous message_end snapshot. After an
+              // error, only a restarted attempt may supply a recovery result.
+              if (streamError !== undefined && !canRecoverStreamError) continue;
               resultText = parsed.result;
-              accumulatedOutput += parsed.result;
+              accumulatedOutput = provider.parsedOutputOnly
+                ? parsed.result
+                : accumulatedOutput + parsed.result;
+              streamError = undefined;
+              canRecoverStreamError = false;
+            } else if (
+              parsed.type === "error" ||
+              parsed.type === "output_reset"
+            ) {
+              resultText = undefined;
+              accumulatedOutput = "";
+              if (parsed.type === "error") {
+                streamError = parsed.message;
+                canRecoverStreamError = false;
+              } else {
+                canRecoverStreamError = true;
+              }
             } else if (parsed.type === "tool_call") {
               onToolCall(parsed.name, parsed.args);
             } else if (parsed.type === "session_id") {
@@ -171,14 +201,12 @@ const invokeAgent = (
               usage = parsed.usage;
             }
           }
-          // Check for the completion signal AFTER parsing this line so the
-          // accumulator contains everything seen so far. Flip to the
-          // completion-grace timer the first time the signal appears.
-          if (
-            !completionDetected &&
-            completionSignals.some((sig) => accumulatedOutput.includes(sig))
-          ) {
-            completionDetected = true;
+          // Recompute rather than latch: errors and restarted assistant output
+          // revoke an earlier signal, including its hanging-process grace timer.
+          completionDetected =
+            streamError === undefined &&
+            completionSignals.some((sig) => accumulatedOutput.includes(sig));
+          if (completionDetected) {
             interruptFiber(warningFiber);
             warningFiber = null;
           }
@@ -188,12 +216,22 @@ const invokeAgent = (
         stdin: printCmd.stdin,
       });
 
+      // Permit Pi's internal retries to recover, but never accept an unresolved
+      // stream error just because the CLI process exits with code zero.
+      if (streamError !== undefined) {
+        return yield* Effect.fail(
+          new AgentError({
+            message: `${provider.name} failed: ${streamError}`,
+          }),
+        );
+      }
+
       if (execResult.exitCode !== 0) {
         // Prefer stderr; fall back to resultText (from parsed stream events),
         // then to the tail of raw stdout (last 20 non-empty lines).
         let errorDetail = execResult.stderr;
         if (!errorDetail.trim()) {
-          errorDetail = resultText;
+          errorDetail = resultText ?? "";
         }
         if (!errorDetail.trim()) {
           const lines = execResult.stdout.split("\n").filter((l) => l.trim());
@@ -206,7 +244,12 @@ const invokeAgent = (
         );
       }
 
-      return { result: resultText || execResult.stdout, sessionId, usage };
+      // Pi raw stdout also contains user prompts and tool output. Other
+      // providers retain upstream's raw-stdout fallback for compatibility.
+      const result = provider.parsedOutputOnly
+        ? (resultText ?? accumulatedOutput)
+        : resultText || execResult.stdout;
+      return { result, sessionId, usage };
     }).pipe(
       Effect.ensuring(
         Effect.sync(() => {

@@ -180,7 +180,9 @@ export interface SandboxRunResult {
    * same long-lived sandbox: the parent session JSONL is left intact and the
    * child run gets its own session id. Present only when the provider
    * supports resume (`sessionStorage` populated) and a session id was
-   * captured. See ADR 0018 for fork semantics.
+   * captured. Pi exposes this generic handle but rejects session forks;
+   * only capture and in-place resume are supported for Pi. See ADR 0018
+   * for the supported Claude Code and Codex fork semantics.
    */
   readonly fork?: (
     prompt: string,

@@ -391,6 +391,7 @@ export interface RunOptions<A extends AgentProvider = AgentProvider> {
    * it. The parent session JSONL is left intact and the agent writes a new
    * session under a fresh id. Exposed as the public `.fork()` method on
    * `RunResult` rather than as a stand-alone caller option — see ADR 0018.
+   * Supported by Claude Code and Codex only; Pi rejects session forks.
    *
    * @internal
    */
@@ -465,7 +466,8 @@ export interface RunResult {
    * parent session JSONL is left intact and the child run gets its own
    * session id, enabling fan-out patterns where multiple children diverge
    * from a single parent. Present only when the provider supports resume
-   * (`sessionStorage` populated).
+   * (`sessionStorage` populated). Pi also exposes the generic handle but
+   * rejects forks; only capture and in-place resume are supported for Pi.
    *
    * Sessions only: fork isolates the agent session, not the branch or
    * sandbox. Safe concurrent fan-out (`Promise.all([r.fork(a), r.fork(b)])`)

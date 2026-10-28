@@ -34,6 +34,8 @@ const fileExists = async (path: string): Promise<boolean> => {
 export type ParsedStreamEvent =
   | { type: "text"; text: string }
   | { type: "result"; result: string }
+  | { type: "error"; message: string }
+  | { type: "output_reset" }
   | { type: "tool_call"; name: string; args: string }
   | { type: "session_id"; sessionId: string }
   | { type: "usage"; usage: IterationUsage };
@@ -271,6 +273,8 @@ export interface AgentProvider {
   readonly sessionStorage?: AgentSessionStorage;
   buildPrintCommand(options: AgentCommandOptions): PrintCommand;
   buildInteractiveArgs?(options: AgentCommandOptions): string[];
+  /** Use only parsed assistant output, never raw stdout, as the run result. */
+  readonly parsedOutputOnly?: boolean;
   parseStreamLine(line: string): ParsedStreamEvent[];
   /** Parse token usage from the captured session JSONL content. Only implemented by Claude Code. */
   parseSessionUsage?(content: string): IterationUsage | undefined;
@@ -543,6 +547,34 @@ const makePiSessionStorage = (options?: PiOptions): AgentSessionStorage => {
   };
 };
 
+const parsePiAssistant = (message: unknown): ParsedStreamEvent[] => {
+  if (!message || typeof message !== "object") return [];
+  const msg = message as Record<string, unknown>;
+  if (msg.role !== "assistant") return [];
+  if (msg.stopReason === "error" || msg.stopReason === "aborted") {
+    return [
+      {
+        type: "error",
+        message:
+          typeof msg.errorMessage === "string" && msg.errorMessage.trim()
+            ? msg.errorMessage
+            : `Pi assistant ${msg.stopReason}`,
+      },
+    ];
+  }
+  const texts = Array.isArray(msg.content)
+    ? msg.content.flatMap((block: unknown) => {
+        if (!block || typeof block !== "object") return [];
+        const content = block as Record<string, unknown>;
+        return content.type === "text" && typeof content.text === "string"
+          ? [content.text]
+          : [];
+      })
+    : [];
+  // An empty final answer is authoritative too: it revokes earlier text.
+  return [{ type: "result", result: texts.join("") }];
+};
+
 const parsePiStreamLine = (line: string): ParsedStreamEvent[] => {
   if (!line.startsWith("{")) return [];
   try {
@@ -554,7 +586,15 @@ const parsePiStreamLine = (line: string): ParsedStreamEvent[] => {
     if (obj.type === "session" && typeof obj.id === "string") {
       return [{ type: "session_id", sessionId: obj.id }];
     }
+    if (
+      (obj.type === "message_start" && obj.message?.role === "assistant") ||
+      obj.type === "auto_retry_start"
+    ) {
+      return [{ type: "output_reset" }];
+    }
+    if (obj.type === "message_end") return parsePiAssistant(obj.message);
     if (obj.type === "message_update" && obj.assistantMessageEvent) {
+      if (obj.message?.role && obj.message.role !== "assistant") return [];
       const evt = obj.assistantMessageEvent as {
         type: string;
         delta?: string;
@@ -575,34 +615,33 @@ const parsePiStreamLine = (line: string): ParsedStreamEvent[] => {
       if (typeof argValue !== "string") return [];
       return [{ type: "tool_call", name: toolName, args: argValue }];
     }
-    // Pi emits agent_error / error events on stdout (not stderr) for auth
-    // failures, rate limits, and API errors. Capture them as result events so
-    // the Orchestrator's stderr-empty fallback can surface them to the user.
+    // Pi can exit zero even after a terminal provider error. Keep errors
+    // separate from assistant results so they can never signal completion.
     if (obj.type === "agent_error" || obj.type === "error") {
-      const msg = extractErrorMessage(obj);
-      return msg ? [{ type: "result", result: msg }] : [];
+      return [
+        {
+          type: "error",
+          message: extractErrorMessage(obj) ?? `Pi ${obj.type}`,
+        },
+      ];
+    }
+    if (obj.type === "auto_retry_end" && obj.success === false) {
+      return [
+        {
+          type: "error",
+          message:
+            typeof obj.finalError === "string" && obj.finalError.trim()
+              ? obj.finalError
+              : "Pi retries exhausted",
+        },
+      ];
     }
     if (obj.type === "agent_end" && Array.isArray(obj.messages)) {
-      const messages = obj.messages as {
-        role: string;
-        content: { type: string; text?: string }[];
-      }[];
-      for (let i = messages.length - 1; i >= 0; i--) {
-        const msg = messages[i];
-        if (msg?.role === "assistant") {
-          const texts: string[] = [];
-          for (const block of msg.content) {
-            if (block.type === "text" && typeof block.text === "string") {
-              texts.push(block.text);
-            }
-          }
-          if (texts.length > 0) {
-            return [{ type: "result", result: texts.join("") }];
-          }
-          break;
-        }
-      }
-      return [];
+      return parsePiAssistant(
+        obj.messages.findLast(
+          (msg: { role?: unknown } | null) => msg?.role === "assistant",
+        ),
+      );
     }
   } catch {
     // Not valid JSON — skip
@@ -633,11 +672,18 @@ export const pi = (
   env: options?.env ?? {},
   captureSessions: options?.captureSessions ?? true,
   sessionStorage: makePiSessionStorage(options),
+  parsedOutputOnly: true,
 
   buildPrintCommand({
     prompt,
     resumeSession,
+    forkSession,
   }: AgentCommandOptions): PrintCommand {
+    if (forkSession) {
+      throw new Error(
+        "Pi session fork is not supported; use resumeSession to continue the existing session in place.",
+      );
+    }
     const thinkingFlag = options?.thinking
       ? ` --thinking ${options.thinking}`
       : "";

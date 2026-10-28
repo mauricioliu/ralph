@@ -2730,6 +2730,313 @@ const makeMockPiAgentLayer = (
 };
 
 describe("Orchestrator with pi provider", () => {
+  const marker = "<promise>COMPLETE</promise>";
+  const assistant = (text: string, stopReason = "stop") => ({
+    role: "assistant",
+    stopReason,
+    content: [{ type: "text", text }],
+    ...(stopReason === "error"
+      ? { errorMessage: "429 code 1308: quota exhausted" }
+      : {}),
+  });
+
+  const replayPi = async (
+    events: unknown[],
+    hang = false,
+    replayOptions: {
+      exitCode?: number;
+      streamEvents?: AgentStreamEvent[];
+      signal?: AbortSignal;
+    } = {},
+  ) => {
+    const hostDir = await mkdtemp(join(tmpdir(), "orch-pi-replay-"));
+    await initRepo(hostDir);
+    await commitFile(hostDir, "hello.txt", "hello", "initial commit");
+    const { factoryLayer } = makeTestSandboxFactory(hostDir, (dir) => {
+      const real = makeLocalSandbox(dir);
+      return {
+        ...real,
+        exec: (command, options) => {
+          if (!command.startsWith("pi ")) return real.exec(command, options);
+          return Effect.gen(function* () {
+            const lines = events.map((event) => JSON.stringify(event));
+            for (const line of lines) options?.onLine?.(line);
+            if (hang) yield* Effect.never;
+            return {
+              stdout: lines.join("\n"),
+              stderr: "",
+              exitCode: replayOptions.exitCode ?? 0,
+            };
+          });
+        },
+      };
+    });
+    try {
+      return await Effect.runPromise(
+        orchestrate({
+          provider: piTestProvider,
+          hostRepoDir: hostDir,
+          iterations: 1,
+          prompt: `Do work, then emit ${marker}`,
+          idleTimeoutSeconds: 0.1,
+          completionTimeoutSeconds: 0.01,
+          signal: replayOptions.signal,
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              factoryLayer,
+              SilentDisplay.layer(
+                Ref.unsafeMake<ReadonlyArray<DisplayEntry>>([]),
+              ),
+              agentStreamEmitterLayer((event) => {
+                replayOptions.streamEvents?.push(event);
+              }),
+            ),
+          ),
+        ),
+      );
+    } finally {
+      await rm(hostDir, { recursive: true, force: true });
+    }
+  };
+
+  it("rejects Pi quota errors despite exit zero and a COMPLETE in the user prompt", async () => {
+    const user = { role: "user", content: [{ type: "text", text: marker }] };
+    const error = assistant("", "error");
+    await expect(
+      replayPi([
+        { type: "message_start", message: user },
+        { type: "message_end", message: error },
+        { type: "agent_end", messages: [user, error] },
+      ]),
+    ).rejects.toThrow(/429.*1308/);
+  });
+
+  it("never falls back to user, tool, or malformed stdout for completion", async () => {
+    const result = await replayPi([
+      { type: "message_start", message: { role: "user", content: marker } },
+      { type: "tool_execution_end", result: marker },
+      { mystery: marker },
+    ]);
+    expect(result.completionSignal).toBeUndefined();
+    expect(result.stdout).toBe("");
+  });
+
+  it.each(["error", "aborted"])(
+    "discards a streamed COMPLETE when the final message is %s",
+    async (stopReason) => {
+      await expect(
+        replayPi([
+          {
+            type: "message_update",
+            assistantMessageEvent: { type: "text_delta", delta: marker },
+          },
+          { type: "message_end", message: assistant(marker, stopReason) },
+          { type: "agent_end", messages: [assistant(marker, stopReason)] },
+        ]),
+      ).rejects.toThrow(stopReason === "error" ? /429/ : /aborted/);
+    },
+  );
+
+  it("allows Pi's internal retry to recover before process exit", async () => {
+    const error = assistant("", "error");
+    const success = assistant(marker);
+    const result = await replayPi([
+      { type: "message_end", message: error },
+      { type: "agent_end", messages: [error] },
+      { type: "auto_retry_start", attempt: 1 },
+      { type: "message_start", message: { role: "assistant", content: [] } },
+      { type: "message_end", message: success },
+      { type: "agent_end", messages: [error, success] },
+    ]);
+    expect(result.completionSignal).toBe(marker);
+  });
+
+  it("does not force-complete a hanging failed stream after seeing COMPLETE", async () => {
+    await expect(
+      replayPi(
+        [
+          {
+            type: "message_update",
+            assistantMessageEvent: { type: "text_delta", delta: marker },
+          },
+          { type: "message_end", message: assistant("", "error") },
+        ],
+        true,
+      ),
+    ).rejects.toThrow(/429/);
+  });
+
+  it("does not retain COMPLETE from a previous assistant turn", async () => {
+    const result = await replayPi([
+      { type: "message_end", message: assistant(marker) },
+      { type: "message_start", message: { role: "assistant", content: [] } },
+      { type: "message_end", message: assistant("Not finished") },
+      {
+        type: "agent_end",
+        messages: [assistant(marker), assistant("Not finished")],
+      },
+    ]);
+    expect(result.completionSignal).toBeUndefined();
+  });
+  it.each([false, true])(
+    "rejects exhausted retries after COMPLETE (hanging: %s)",
+    async (hang) => {
+      await expect(
+        replayPi(
+          [
+            { type: "message_end", message: assistant(marker) },
+            {
+              type: "auto_retry_end",
+              success: false,
+              finalError: "synthetic retries exhausted",
+            },
+          ],
+          hang,
+        ),
+      ).rejects.toThrow(/synthetic retries exhausted/);
+    },
+  );
+
+  it.each(["agent_error", "error"])(
+    "rejects a %s after COMPLETE even if its diagnostic contains COMPLETE",
+    async (type) => {
+      await expect(
+        replayPi([
+          { type: "message_end", message: assistant(marker) },
+          { type, error: `failed ${marker}` },
+        ]),
+      ).rejects.toThrow(/failed/);
+    },
+  );
+
+  it.each([
+    { type: "message_start", message: assistant("") },
+    { type: "auto_retry_start", attempt: 1 },
+  ])("revokes the completion grace timer on $type", async (restart) => {
+    await expect(
+      replayPi(
+        [{ type: "message_end", message: assistant(marker) }, restart],
+        true,
+      ),
+    ).rejects.toThrow(/Agent idle/);
+  });
+
+  it("requires a successful final message to recover from an error, not just streamed text", async () => {
+    await expect(
+      replayPi(
+        [
+          { type: "error", message: "synthetic failure" },
+          { type: "auto_retry_start", attempt: 1 },
+          {
+            type: "message_update",
+            assistantMessageEvent: { type: "text_delta", delta: marker },
+          },
+          { type: "auto_retry_end", success: true },
+        ],
+        true,
+      ),
+    ).rejects.toThrow(/synthetic failure/);
+  });
+
+  it("does not let agent_end replay a pre-error completion as recovery", async () => {
+    const previous = assistant(marker);
+    await expect(
+      replayPi([
+        { type: "message_end", message: previous },
+        { type: "error", message: "synthetic later failure" },
+        { type: "agent_end", messages: [previous] },
+      ]),
+    ).rejects.toThrow(/synthetic later failure/);
+  });
+
+  it("replaces a streamed COMPLETE with an authoritative empty result", async () => {
+    const result = await replayPi([
+      {
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: marker },
+      },
+      { type: "message_end", message: assistant("") },
+    ]);
+    expect(result.completionSignal).toBeUndefined();
+    expect(result.stdout).toBe("");
+  });
+
+  it("does not infer completion by concatenating a text delta with a repeated final result", async () => {
+    const result = await replayPi([
+      {
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: "<promise>COMP" },
+      },
+      { type: "message_end", message: assistant("LETE</promise>") },
+    ]);
+    expect(result.completionSignal).toBeUndefined();
+  });
+
+  it("still rejects a nonzero process exit after COMPLETE", async () => {
+    await expect(
+      replayPi([{ type: "message_end", message: assistant(marker) }], false, {
+        exitCode: 7,
+      }),
+    ).rejects.toThrow(/pi exited with code 7/);
+  });
+
+  it("preserves streaming and every raw event while completing a hanging healthy stream", async () => {
+    const streamEvents: AgentStreamEvent[] = [];
+    const events = [
+      { type: "message_start", message: assistant("") },
+      {
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: marker },
+      },
+      {
+        type: "tool_execution_start",
+        toolName: "Bash",
+        args: { command: "synthetic command (not executed)" },
+      },
+      { type: "agent_end", messages: [assistant(marker)] },
+      { type: "unrecognized_event", data: "still forwarded" },
+    ];
+    const result = await replayPi(events, true, { streamEvents });
+    expect(result.completionSignal).toBe(marker);
+    expect(result.stdout).toBe(marker);
+    expect(
+      streamEvents
+        .filter((event) => event.type === "raw")
+        .map((event) => event.line),
+    ).toEqual(events.map((event) => JSON.stringify(event)));
+    expect(
+      streamEvents.some(
+        (event) => event.type === "text" && event.message.includes(marker),
+      ),
+    ).toBe(true);
+    expect(
+      streamEvents.some(
+        (event) => event.type === "toolCall" && event.name === "Bash",
+      ),
+    ).toBe(true);
+  });
+
+  it("preserves cancellation of a Pi stream", async () => {
+    const controller = new AbortController();
+    const reason = new Error("synthetic Pi cancellation");
+    const streamEvents: AgentStreamEvent[] = [];
+    // Abort from a stream callback so the test does not depend on git setup timing.
+    const originalPush = streamEvents.push.bind(streamEvents);
+    streamEvents.push = (...events) => {
+      const length = originalPush(...events);
+      if (events.some((event) => event.type === "raw"))
+        controller.abort(reason);
+      return length;
+    };
+    await expect(
+      replayPi([{ type: "message_start", message: assistant("") }], true, {
+        signal: controller.signal,
+        streamEvents,
+      }),
+    ).rejects.toThrow(/synthetic Pi cancellation/);
+  });
+
   it("runs a single iteration with pi provider and produces a commit", async () => {
     const hostDir = await mkdtemp(join(tmpdir(), "orch-pi-host-"));
     await initRepo(hostDir);

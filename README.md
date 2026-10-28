@@ -663,6 +663,8 @@ await run({
 
 Tell the agent to output your chosen string(s) in the prompt, and the orchestrator will stop when it detects any of them. The matched signal is returned as `result.completionSignal`.
 
+For Pi, completion and structured output come only from parsed assistant text, never user messages, tool output, or raw stdout. Assistant `error`/`aborted` stop reasons, `agent_error`/`error`, and exhausted automatic retries fail the run even if Pi exits with code zero. An observed error, new assistant message, or retry start revokes an earlier completion signal and its completion timer. A restarted attempt can recover only with a successful final assistant message; streamed text alone does not clear an error. The latest assistant result replaces earlier text, including when empty. Raw events still reach logging/stream callbacks.
+
 #### Hanging processes after the completion signal
 
 The agent process is expected to exit shortly after emitting the completion signal. When a child it spawned — a `gh`/git subprocess, a long-lived MCP server, etc. — inherits the agent's stdout pipe and keeps it open, the parent process can linger long past its logical end. Ralph would otherwise wait for the full `idleTimeoutSeconds` and fail with `AgentIdleTimeoutError`, throwing away the commits the agent already made.
@@ -952,7 +954,7 @@ const [reviewA, reviewB] = await Promise.all([
 
 **Fork is session-only.** `--fork-session` and `codex exec fork` isolate the agent session JSONL — they do **not** isolate the branch, worktree, or sandbox. Safe concurrent fan-out (`Promise.all([r.fork(a), r.fork(b)])`) requires the caller to give each child a distinct `branch` via `branchStrategy: { type: "branch", branch: "..." }`. The default `head` and `merge-to-head` strategies are **not** safe for concurrent forks: `head` shares the host working directory across all children, and `merge-to-head` races `git merge` against the same HEAD. See [ADR 0018](docs/adr/0018-fork-is-session-only.md).
 
-`fork` is present only on results from providers with `sessionStorage` (Claude Code, Codex) — hence the optional-chaining call. The same single-iteration and session-file constraints as `.resume()` apply.
+`fork` handles are exposed on results from providers with `sessionStorage`; supported fork semantics are limited to Claude Code and Codex. **Pi supports capture and in-place resume, not session fork.** Its generic result may expose a `fork` handle, but invoking it rejects with `Pi session fork is not supported` before launching Pi, rather than silently resuming and mutating the parent session. No Pi parent/child isolation is claimed or validated. Use `.resume()` to continue a Pi conversation in place. The same single-iteration and session-file constraints as `.resume()` apply.
 
 ### `ClaudeCodeOptions`
 
