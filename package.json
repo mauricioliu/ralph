@@ -39,6 +39,7 @@
     "postbuild": "rm -rf dist/templates && cp -r src/templates dist/templates && node scripts/check-public-types-effect-free.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:package": "node scripts/smoke-package.mjs",
     "typecheck": "tsgo --noEmit",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -83,7 +84,8 @@
     "zod": "^4.4.3"
   },
   "dependencies": {
-    "@clack/prompts": "^1.1.0"
+    "@clack/prompts": "^1.1.0",
+    "@standard-schema/spec": "^1.1.0"
   },
   "peerDependencies": {
     "@daytona/sdk": "^0.164.0",

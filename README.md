@@ -1,5 +1,11 @@
 # Ralph
 
+Ralph is a reconstruction of [Sandcastle](https://github.com/mattpocock/sandcastle) by Matt Pocock, based on upstream `0.12.0` at `a53e227250fb51df0ad54155b85fecc1c090c937`. The MIT license and upstream attribution are preserved in [LICENSE](LICENSE); [CHANGELOG.md](CHANGELOG.md), ADRs, research, and sample transcripts retain historical Sandcastle references. The removed upstream documentation site is not restored.
+
+The package is `@mauricioliu/ralph`, the CLI is `ralph`, and per-repository configuration lives in `.ralph/`. Existing Sandcastle consumers must update imports, commands and config paths (including prompts and scripts); there is no automatic migration or legacy `.sandcastle` fallback. The inherited version remains `0.12.0`, not the old fork's `0.8.0`; release versioning and publication remain pending.
+
+For local validation after `npm ci`, run `npm run build`, `npm run typecheck`, `npm test`, and `npm run test:package`. The package smoke check uses a temporary home and offline npm cache, installs a local tarball, checks CLI/public imports, and compiles all five scaffolds in ESM and non-ESM projects without executing them. It needs the runtime dependencies and Zod in the npm cache; it never publishes, launches agents or starts sandbox services. See [the ticket #10 validation receipt](docs/rebuild/ticket-10.md).
+
 ## What Is Ralph?
 
 A TypeScript library for orchestrating AI coding agents in isolated sandboxes:
