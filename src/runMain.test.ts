@@ -91,14 +91,17 @@ describe("ralph run (built CLI, synthetic entry points only)", () => {
     expect((await invoke(cwd)).code).toBe(7);
   });
 
-  it("preserves an entry point terminated by signal", async () => {
-    const cwd = await fixture();
-    await writeFile(
-      join(cwd, ".ralph/main.mts"),
-      'process.kill(process.pid, "SIGTERM");',
-    );
-    expect((await invoke(cwd)).code).toBe(128 + constants.signals.SIGTERM);
-  });
+  it.each(["SIGINT", "SIGTERM"] as const)(
+    "preserves entry-point termination by %s",
+    async (signal) => {
+      const cwd = await fixture();
+      await writeFile(
+        join(cwd, ".ralph/main.mts"),
+        `process.kill(process.pid, ${JSON.stringify(signal)});`,
+      );
+      expect((await invoke(cwd)).code).toBe(128 + constants.signals[signal]);
+    },
+  );
 
   it("explains missing entry points", async () => {
     const cwd = await fixture();
