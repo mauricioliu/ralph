@@ -1,3 +1,6 @@
+import { posix } from "node:path";
+import { CredentialProvisionError } from "./errors.js";
+
 /**
  * Sandbox provider types — the pluggable interface for sandbox runtimes.
  *
@@ -245,7 +248,9 @@ export interface NoSandboxProvider {
  * Deliberately separate from session capture/resume (no sandbox→host copy).
  */
 export interface CredentialSandboxHandle {
+  /** Use the same user and HOME as agent execution; sudo is only for explicit repair. */
   exec: BindMountSandboxHandle["exec"];
+  /** Resolve only after the one-way file copy has settled, including on failure. */
   copyFile(hostPath: string, sandboxPath: string): Promise<void>;
 }
 
@@ -254,17 +259,36 @@ export const toCredentialHandle = (
   handle: BindMountSandboxHandle | IsolatedSandboxHandle | NoSandboxHandle,
 ): CredentialSandboxHandle | undefined => {
   if (typeof handle.exec !== "function") return undefined;
+  const checkDestination = (sandboxPath: string): void => {
+    const relative = posix.relative(handle.worktreePath, sandboxPath);
+    if (
+      relative === "" ||
+      (!relative.startsWith("../") &&
+        relative !== ".." &&
+        !posix.isAbsolute(relative))
+    ) {
+      throw new CredentialProvisionError({
+        message:
+          "Credential destination must be outside the sandbox worktree to avoid syncing secrets into host artifacts. Set credentials.sandboxAgentDir outside the worktree.",
+      });
+    }
+  };
   if ("copyFileIn" in handle && typeof handle.copyFileIn === "function") {
     return {
       exec: (command, options) => handle.exec(command, options),
-      copyFile: (hostPath, sandboxPath) =>
-        handle.copyFileIn(hostPath, sandboxPath),
+      copyFile: async (hostPath, sandboxPath) => {
+        checkDestination(sandboxPath);
+        await handle.copyFileIn(hostPath, sandboxPath);
+      },
     };
   }
   if ("copyIn" in handle && typeof handle.copyIn === "function") {
     return {
       exec: (command, options) => handle.exec(command, options),
-      copyFile: (hostPath, sandboxPath) => handle.copyIn(hostPath, sandboxPath),
+      copyFile: async (hostPath, sandboxPath) => {
+        checkDestination(sandboxPath);
+        await handle.copyIn(hostPath, sandboxPath);
+      },
     };
   }
   return undefined;

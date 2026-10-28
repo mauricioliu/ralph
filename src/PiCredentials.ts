@@ -76,13 +76,14 @@ export const makePiCredentialProvisioner =
       step = "discover sandbox HOME (or set credentials.sandboxAgentDir)";
       let dir = options?.sandboxAgentDir;
       if (dir === undefined) {
-        const result = await handle.exec('printf %s "$HOME"');
+        // Query the normal exec user, never sudo. Runtime/provider env may
+        // select a directory even when PiOptions does not override it.
+        const result = await handle.exec(
+          'if [ -n "${PI_CODING_AGENT_DIR:-}" ]; then printf %s "$PI_CODING_AGENT_DIR"; else test -n "$HOME" && printf %s "$HOME/.pi/agent"; fi',
+        );
         signal?.throwIfAborted();
         if (result.exitCode !== 0) throw new Error("HOME discovery failed");
-        const home = result.stdout;
-        if (!home.startsWith("/") || /[\r\n\0]/.test(home))
-          throw new Error("invalid HOME");
-        dir = posix.join(home, ".pi", "agent");
+        dir = result.stdout;
       }
       if (
         !posix.isAbsolute(dir) ||

@@ -38,6 +38,33 @@ describe("credential capability and policy", () => {
     }
   });
 
+  it.each(["copyFileIn", "copyIn"] as const)(
+    "rejects %s credential destinations inside the synced worktree before copying",
+    async (method) => {
+      const copy = vi.fn(async () => {});
+      const raw = { ...base(), [method]: copy };
+      const handle = toCredentialHandle(
+        raw as unknown as IsolatedSandboxHandle,
+      )!;
+      for (const destination of [
+        "/workspace/auth.json",
+        "/workspace/.pi/agent/auth.json",
+        "/workspace/../workspace/auth.json",
+        "/workspace",
+      ]) {
+        await expect(
+          handle.copyFile("synthetic-source", destination),
+        ).rejects.toMatchObject({
+          _tag: "CredentialProvisionError",
+          message: expect.stringContaining("outside the sandbox worktree"),
+        });
+      }
+      expect(copy).not.toHaveBeenCalled();
+      await handle.copyFile("synthetic-source", "/workspace-sibling/auth.json");
+      expect(copy).toHaveBeenCalledOnce();
+    },
+  );
+
   it("rejects missing or non-function copy/exec capabilities", () => {
     for (const handle of [
       base(),

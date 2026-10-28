@@ -39,7 +39,8 @@ describe("Pi one-way credentials (synthetic files, local shell only)", () => {
       exec: vi.fn(async (command) => {
         try {
           const result = await exec("sh", ["-c", command], {
-            env: { ...process.env, HOME: home },
+            // The host directory override is not inherited by an isolated runtime.
+            env: { ...process.env, PI_CODING_AGENT_DIR: "", HOME: home },
           });
           return { ...result, exitCode: 0 };
         } catch (error) {
@@ -127,6 +128,14 @@ describe("Pi one-way credentials (synthetic files, local shell only)", () => {
     vi.stubEnv("PI_CODING_AGENT_DIR", undefined);
     await pi("synthetic").provisionCredentials!({ handle });
     expect(await readFile(join(dest, "auth.json"), "utf8")).toBe(AUTH);
+  });
+
+  it("rejects an empty sandbox HOME rather than writing under the filesystem root", async () => {
+    home = "";
+    await expect(provision()).rejects.toMatchObject({
+      _tag: "CredentialProvisionError",
+    });
+    expect(handle.copyFile).not.toHaveBeenCalled();
   });
 
   it("requires readable host auth before any sandbox operation", async () => {

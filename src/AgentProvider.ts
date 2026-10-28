@@ -718,14 +718,31 @@ export const pi = (
     const sessionFlag = resumeSession
       ? ` --session ${shellEscape(resumeSession)}`
       : "";
+    const dir =
+      options?.credentials?.sandboxAgentDir ??
+      options?.env?.PI_CODING_AGENT_DIR;
+    const envPrefix =
+      dir === undefined
+        ? ""
+        : `env ${shellEscape(`PI_CODING_AGENT_DIR=${dir}`)} `;
     return {
-      command: `pi -p --mode json --model ${shellEscape(model)}${thinkingFlag}${sessionFlag}`,
+      // Reusable sandboxes are created before the agent is known. Apply the
+      // directory on each launch too, not only in sandbox creation env.
+      command: `${envPrefix}pi -p --mode json --model ${shellEscape(model)}${thinkingFlag}${sessionFlag}`,
       stdin: prompt,
     };
   },
 
   buildInteractiveArgs({ prompt }: AgentCommandOptions): string[] {
-    const args = ["pi", "--model", model];
+    const dir =
+      options?.credentials?.sandboxAgentDir ??
+      options?.env?.PI_CODING_AGENT_DIR;
+    const args = [
+      ...(dir === undefined ? [] : ["env", `PI_CODING_AGENT_DIR=${dir}`]),
+      "pi",
+      "--model",
+      model,
+    ];
     if (prompt) args.push(prompt);
     return args;
   },

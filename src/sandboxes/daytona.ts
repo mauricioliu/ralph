@@ -6,7 +6,7 @@
  */
 
 import { readdir, stat } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { join, posix, relative } from "node:path";
 import {
   createIsolatedSandboxProvider,
   type ExecResult,
@@ -81,7 +81,7 @@ export const daytona = (options?: DaytonaOptions): IsolatedSandboxProvider =>
   createIsolatedSandboxProvider({
     name: "daytona",
     env: options?.env,
-    create: async (): Promise<IsolatedSandboxHandle> => {
+    create: async (createOptions): Promise<IsolatedSandboxHandle> => {
       const maxOutputTailChars = options?.maxOutputTailChars ?? MAX_TAIL_CHARS;
       const { Daytona } =
         (await import("@daytona/sdk")) as typeof import("@daytona/sdk");
@@ -92,12 +92,22 @@ export const daytona = (options?: DaytonaOptions): IsolatedSandboxProvider =>
       if (options?.target) config.target = options.target;
 
       const client: DaytonaClient = new Daytona(config);
-      const sandbox = await client.create(options?.create as any);
+      const sandbox = await client.create({
+        ...options?.create,
+        envVars: {
+          ...options?.create?.envVars,
+          ...createOptions.env,
+        },
+      });
 
-      const worktreePath =
+      // The SDK work dir may be HOME itself. Keep the synced repository in
+      // a child so HOME/.pi credentials never become untracked sync artifacts.
+      const worktreePath = posix.join(
         (await sandbox.getWorkDir()) ??
-        (await sandbox.getUserHomeDir()) ??
-        "/home/daytona";
+          (await sandbox.getUserHomeDir()) ??
+          "/home/daytona",
+        "ralph-workspace",
+      );
 
       return {
         worktreePath,

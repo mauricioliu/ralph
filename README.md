@@ -1011,8 +1011,9 @@ No-sandbox runs skip transfer because Pi already reads the host files.
 
 Authenticate with Pi **on the host** first. The host directory defaults to
 `PI_CODING_AGENT_DIR` when set, otherwise `~/.pi/agent`. The destination
-defaults to the sandbox agent user's discovered `$HOME/.pi/agent`, not a
-hardcoded user path. Non-standard installs can override both directories:
+defaults to the normal exec user's runtime `PI_CODING_AGENT_DIR` when nonempty,
+otherwise `$HOME/.pi/agent`, not a hardcoded user path. Non-standard installs
+can override both directories:
 
 ```typescript
 const agent = pi("claude-sonnet-4-6", {
@@ -1025,7 +1026,13 @@ const agent = pi("claude-sonnet-4-6", {
 
 The sandbox override also sets Pi's `PI_CODING_AGENT_DIR` in provider env
 (and therefore applies to no-sandbox launches too). Alternatively set that
-variable in `PiOptions.env` to select the transfer destination. Session
+variable in `PiOptions.env` to select the transfer destination. Explicit Pi
+overrides are applied to every launch (using POSIX `env`), including reusable
+sandboxes created before the agent was selected. Daytona forwards launch env
+through the SDK's `envVars`, overriding conflicting template env keys. Its synced
+repository lives in `ralph-workspace/` beneath the SDK work directory, not HOME
+itself. Credential copies targeting the sandbox worktree are rejected to prevent
+secrets entering sync artifacts; keep overrides outside the repository. Session
 directory overrides remain independent under `sessionStorage`; changing
 credential directories does not change Ralph's session capture/resume paths.
 
@@ -1058,7 +1065,9 @@ are unchanged.
 Automated coverage uses synthetic credentials and mock agent launches only.
 A real authenticated Pi run inside a real sandbox, including provider OAuth
 refresh behavior, is a separate manual validation; it is not exercised by
-the test suite.
+the test suite. See the [credential entry/provider validation matrix](docs/rebuild/ticket-13.md)
+for automated coverage and remaining real-runtime limitations (including the
+built-in isolated providers' lack of interactive transport).
 
 ### Provider `env`
 
