@@ -108,7 +108,7 @@ export interface WorktreeInteractiveOptions {
    * An `AbortSignal` that cancels the interactive session when aborted.
    *
    * - If `signal.aborted` is already `true` at entry, rejects immediately.
-   * - Aborting during an active session kills the agent subprocess.
+   * - Aborting cancels awaiting the session; process teardown is provider-dependent.
    * - The worktree is preserved on disk after abort.
    * - The `Worktree` handle remains usable for subsequent operations.
    * - The rejected promise surfaces `signal.reason` via
@@ -151,7 +151,7 @@ export interface WorktreeRunOptions {
    *
    * - If `signal.aborted` is already `true` at entry, rejects immediately
    *   without doing any setup work.
-   * - Aborting mid-iteration kills the in-flight agent subprocess.
+   * - Aborting mid-iteration cancels awaiting exec; process teardown is provider-dependent.
    * - The worktree is preserved on disk after abort.
    * - The `Worktree` handle remains usable for subsequent operations.
    */

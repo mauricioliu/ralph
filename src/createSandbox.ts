@@ -126,7 +126,7 @@ export interface ResumeSandboxRunResultOptions {
    * An `AbortSignal` that cancels the run when aborted.
    *
    * - Pre-aborted signal rejects immediately without setup.
-   * - Mid-iteration abort kills the in-flight agent subprocess.
+   * - Mid-iteration abort cancels awaiting exec; process teardown is provider-dependent.
    * - The rejected promise surfaces `signal.reason` verbatim.
    * - The `Sandbox` handle remains usable after abort — call `.run()` again
    *   with a fresh signal, or `.close()` to tear down.

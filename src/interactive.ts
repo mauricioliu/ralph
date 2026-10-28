@@ -81,7 +81,7 @@ export interface InteractiveOptions {
    *
    * - If `signal.aborted` is already `true` at entry, `interactive()` rejects
    *   immediately without doing any setup work.
-   * - Aborting during an active session kills the agent subprocess.
+   * - Aborting cancels awaiting the session; process teardown is provider-dependent.
    * - The rejected promise surfaces `signal.reason` via
    *   `signal.throwIfAborted()` — no Ralph-specific wrapping.
    * - The worktree is preserved on disk after abort (error-path behavior).

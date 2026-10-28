@@ -401,7 +401,7 @@ export interface RunOptions<A extends AgentProvider = AgentProvider> {
    *
    * - If `signal.aborted` is already `true` at entry, `run()` rejects
    *   immediately without doing any setup work.
-   * - Aborting mid-iteration kills the in-flight agent subprocess.
+   * - Aborting mid-iteration cancels awaiting exec; process teardown is provider-dependent.
    * - Phase boundaries (between iterations) also check the signal.
    * - The rejected promise surfaces `signal.reason` via
    *   `signal.throwIfAborted()` — no Ralph-specific wrapping.

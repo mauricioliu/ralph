@@ -4,7 +4,9 @@ Ralph is a reconstruction of [Sandcastle](https://github.com/mattpocock/sandcast
 
 The package is `@mauricioliu/ralph`, the CLI is `ralph`, and per-repository configuration lives in `.ralph/`. Existing Sandcastle consumers must update imports, commands and config paths (including prompts and scripts); there is no automatic migration or legacy `.sandcastle` fallback. The inherited version remains `0.12.0`, not the old fork's `0.8.0`; release versioning and publication remain pending.
 
-For local validation after `npm ci`, run `npm run build`, `npm run typecheck`, `npm test`, and `npm run test:package`. The package smoke check uses a temporary home and offline npm cache, installs a local tarball, checks CLI/public imports, and compiles all five scaffolds in ESM and non-ESM projects for Pi defaults, an explicit Pi model override, and all five alternative agents (70 scaffolds), without executing them. It needs the runtime dependencies and Zod in the npm cache; it never publishes, launches agents or starts sandbox services. See [the ticket #10 validation receipt](docs/rebuild/ticket-10.md).
+For local validation after `npm ci`, run `npm run build`, `npm run typecheck`, `npm test`, and `npm run test:package`. The package smoke check uses a temporary home and offline npm cache, installs a local tarball, checks CLI/public imports, and compiles all five scaffolds in ESM and non-ESM projects for Pi defaults, an explicit Pi model override, and all five alternative agents (70 scaffolds), without executing them. It needs the runtime dependencies and Zod in the npm cache; it never publishes, launches agents or starts sandbox services. Also run `npm run format:check`. See the [final reconstruction audit](docs/rebuild/ticket-16.md) for commit references, coverage, exclusions and checks that still require authorization.
+
+The reconstructed layer is **Ralph identity and Pi/credentials only**. MiniMax, the original fork's authorization allowlist, reviewed branch recovery, coordinator lock, durable issue state/reconciliation and documentation site are excluded. Upstream orchestration and workflow security are retained; historical fork documentation is not current policy. OAuth, live inference, real containers/cloud sandboxes and remote workflows remain unvalidated until separately authorized.
 
 ## What Is Ralph?
 
@@ -410,7 +412,7 @@ if (closeResult.preservedWorktreePath) {
 | `commits`                  | `{ sha }[]`                                                                              | Commits created during the run                                                                                                      |
 | `logFilePath`              | string?                                                                                  | Path to the log file (only when logging to a file)                                                                                  |
 | `resume(prompt, options?)` | `(prompt: string, options?: ResumeSandboxRunResultOptions) => Promise<SandboxRunResult>` | Continue the captured session for one iteration inside the same warm sandbox. Present only when the provider captured a session id. |
-| `fork(prompt, options?)`   | `(prompt: string, options?: ResumeSandboxRunResultOptions) => Promise<SandboxRunResult>` | Fork the captured session for one iteration inside the same warm sandbox. The parent session is left intact (ADR 0018).             |
+| `fork(prompt, options?)`   | `(prompt: string, options?: ResumeSandboxRunResultOptions) => Promise<SandboxRunResult>` | Fork the captured Claude Code/Codex session inside the same warm sandbox (ADR 0018). Pi rejects forks; use `resume()`.              |
 
 #### `CloseResult`
 
@@ -509,23 +511,23 @@ With `branchStrategy: { type: "merge-to-head" }`, each `wt.run()` / `wt.interact
 
 #### `WorktreeRunOptions`
 
-| Option                     | Type                   | Default | Description                                                                                                                          |
-| -------------------------- | ---------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `agent`                    | AgentProvider          | —       | **Required.** Agent provider                                                                                                         |
-| `sandbox`                  | SandboxProvider        | —       | **Required.** Sandbox provider (AFK agents must be sandboxed)                                                                        |
-| `prompt`                   | string                 | —       | Inline prompt (mutually exclusive with `promptFile`)                                                                                 |
-| `promptFile`               | string                 | —       | Path to prompt file                                                                                                                  |
-| `maxIterations`            | number                 | 1       | Maximum iterations to run                                                                                                            |
-| `completionSignal`         | string \| string[]     | —       | Substring(s) to stop the iteration loop early                                                                                        |
-| `idleTimeoutSeconds`       | number                 | 600     | Idle timeout in seconds                                                                                                              |
-| `completionTimeoutSeconds` | number                 | 60      | Grace window after completion signal is seen but agent process hasn't exited                                                         |
-| `name`                     | string                 | —       | Optional run name                                                                                                                    |
-| `logging`                  | LoggingOption          | file    | Logging mode                                                                                                                         |
-| `hooks`                    | SandboxHooks           | —       | Lifecycle hooks (`host.*`, `sandbox.*`)                                                                                              |
-| `promptArgs`               | PromptArgs             | —       | Key-value map for `{{KEY}}` placeholder substitution                                                                                 |
-| `env`                      | Record<string, string> | —       | Environment variables to inject into the sandbox                                                                                     |
-| `resumeSession`            | string                 | —       | Resume a prior session by ID for agents that support resume. Incompatible with `maxIterations > 1`. Session file must exist on host. |
-| `signal`                   | AbortSignal            | —       | Cancel the run when aborted. Kills the in-flight agent subprocess; the worktree is preserved on disk. Rejects with `signal.reason`.  |
+| Option                     | Type                   | Default | Description                                                                                                                                    |
+| -------------------------- | ---------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agent`                    | AgentProvider          | —       | **Required.** Agent provider                                                                                                                   |
+| `sandbox`                  | SandboxProvider        | —       | **Required.** Sandbox provider (AFK agents must be sandboxed)                                                                                  |
+| `prompt`                   | string                 | —       | Inline prompt (mutually exclusive with `promptFile`)                                                                                           |
+| `promptFile`               | string                 | —       | Path to prompt file                                                                                                                            |
+| `maxIterations`            | number                 | 1       | Maximum iterations to run                                                                                                                      |
+| `completionSignal`         | string \| string[]     | —       | Substring(s) to stop the iteration loop early                                                                                                  |
+| `idleTimeoutSeconds`       | number                 | 600     | Idle timeout in seconds                                                                                                                        |
+| `completionTimeoutSeconds` | number                 | 60      | Grace window after completion signal is seen but agent process hasn't exited                                                                   |
+| `name`                     | string                 | —       | Optional run name                                                                                                                              |
+| `logging`                  | LoggingOption          | file    | Logging mode                                                                                                                                   |
+| `hooks`                    | SandboxHooks           | —       | Lifecycle hooks (`host.*`, `sandbox.*`)                                                                                                        |
+| `promptArgs`               | PromptArgs             | —       | Key-value map for `{{KEY}}` placeholder substitution                                                                                           |
+| `env`                      | Record<string, string> | —       | Environment variables to inject into the sandbox                                                                                               |
+| `resumeSession`            | string                 | —       | Resume a prior session by ID for agents that support resume. Incompatible with `maxIterations > 1`. Session file must exist on host.           |
+| `signal`                   | AbortSignal            | —       | Cancel awaiting the run when aborted; the worktree is preserved on disk. Rejects with `signal.reason`. Process teardown is provider-dependent. |
 
 #### `WorktreeRunResult`
 
@@ -549,7 +551,7 @@ With `branchStrategy: { type: "merge-to-head" }`, each `wt.run()` / `wt.interact
 
 ## How it works
 
-Ralph uses a **branch strategy** configured on the sandbox provider to control how the agent's changes relate to branches. There are three strategies:
+Ralph uses a **branch strategy** passed to `run()` / `interactive()` (or `createWorktree()`) to control how the agent's changes relate to branches. There are three strategies:
 
 - **Head** (`{ type: "head" }`) — The agent writes directly to the host working directory. No worktree, no branch indirection. This is the default for bind-mount providers like `docker()`.
 - **Merge-to-head** (`{ type: "merge-to-head" }`) — Ralph creates a temporary branch in a git worktree. The agent works on the temp branch, and changes are merged back to HEAD when done. The temp branch is cleaned up after merge.
@@ -683,6 +685,8 @@ await run({
   completionTimeoutSeconds: 30, // shorter grace window
 });
 ```
+
+Timeout/cancellation tests establish API outcomes, not process termination. Abandoning an exec on a warm handle or no-sandbox provider does not guarantee that its process/children stopped; close a real sandbox and verify runtime teardown separately. See [ADR 0019](docs/adr/0019-completion-timeout-for-hanging-process.md). No process-kill hardening is added by this reconstruction.
 
 This is independent of `idleTimeoutSeconds`. They cover different phases: `idleTimeoutSeconds` runs **before** any signal is seen (genuinely stuck agent → fail); `completionTimeoutSeconds` runs **after** the signal is seen (hanging process → succeed with warning). See [ADR 0019](docs/adr/0019-completion-timeout-for-hanging-process.md).
 
@@ -868,7 +872,7 @@ Removes the Podman image.
 | `idleTimeoutSeconds`       | number             | `600`                         | Idle timeout in seconds — resets on each agent output event                                                                                                                                                                  |
 | `completionTimeoutSeconds` | number             | `60`                          | Grace window in seconds after the completion signal is observed but the agent process has not exited (hanging process). See [Hanging processes after the completion signal](#hanging-processes-after-the-completion-signal). |
 | `resumeSession`            | string             | —                             | Resume a prior session by ID for agents that support resume. Incompatible with `maxIterations > 1`. Session file must exist on host.                                                                                         |
-| `signal`                   | AbortSignal        | —                             | Cancel the run when aborted. Kills the in-flight agent subprocess and cancels lifecycle hooks; the worktree is preserved on disk. Rejects with `signal.reason`.                                                              |
+| `signal`                   | AbortSignal        | —                             | Cancel awaiting the run and signal lifecycle hooks; preserve the worktree. Rejects with `signal.reason`. Process teardown is provider-dependent.                                                                             |
 | `timeouts`                 | Timeouts           | —                             | Override default timeouts for built-in lifecycle steps: `copyToWorktreeMs` (60 000), `gitSetupMs` (10 000), `commitCollectionMs` (30 000), `mergeToHostMs` (30 000).                                                         |
 | `output`                   | OutputDefinition   | —                             | Structured output definition (`Output.object(…)` or `Output.string(…)`). Requires `maxIterations === 1`. See [Structured output](#structured-output).                                                                        |
 
@@ -903,7 +907,7 @@ Removes the Podman image.
 
 ### Session capture
 
-After each resumable provider iteration, Ralph automatically captures the agent's session file from the sandbox to the host. Claude Code sessions are stored under `~/.claude/projects/<encoded-path>/<session-id>.jsonl`; Codex sessions are stored under `~/.codex/sessions/YYYY/MM/DD/rollout-*-<session-id>.jsonl`; Pi sessions are stored under `~/.pi/agent/sessions/--<encoded-cwd>--/<timestamp>_<session-id>.jsonl`. Any provider-specific `cwd` fields are rewritten to match the host repo root, so the provider's native resume command works.
+For bind-mount providers, after each resumable provider iteration Ralph automatically captures the agent's session file from the sandbox to the host. Isolated credential provisioning does not add session capture/resume to isolated providers; their existing session-transport limitation remains. Claude Code sessions are stored under `~/.claude/projects/<encoded-path>/<session-id>.jsonl`; Codex sessions are stored under `~/.codex/sessions/YYYY/MM/DD/rollout-*-<session-id>.jsonl`; Pi sessions are stored under `~/.pi/agent/sessions/--<encoded-cwd>--/<timestamp>_<session-id>.jsonl`. Any provider-specific `cwd` fields are rewritten to match the host repo root, so the provider's native resume command works.
 
 For Claude Code, any `Agent`-tool or `Workflow`-tool subagent transcripts written under `<session-id>/subagents/agent-*.jsonl` are captured alongside the main session. Subagent capture is best-effort: a failure on an individual transcript logs a warning and lets siblings and the main session through. Main-session capture failure still fails the run (see below).
 
@@ -1350,7 +1354,7 @@ const tempDir = () =>
 
 ### Branch strategies
 
-A branch strategy controls where the agent's commits land. Configure it when constructing the provider:
+A branch strategy controls where the agent's commits land. Configure `branchStrategy` on `run()` / `interactive()` or `createWorktree()`, not on the sandbox provider. `createSandbox()` instead takes an explicit `branch`:
 
 | Strategy        | Behavior                                                                 | Bind-mount | Isolated  |
 | --------------- | ------------------------------------------------------------------------ | ---------- | --------- |
@@ -1427,15 +1431,15 @@ The `.ralph/Dockerfile` controls the sandbox environment. The default template i
 - **Node.js 22** (base image)
 - **git**, **curl**, **jq** (system dependencies)
 - **GitHub CLI** (`gh`)
-- **Claude Code CLI**
-- A non-root `agent` user (required — Claude runs as this user)
+- **Pi CLI** (`@earendil-works/pi-coding-agent`) by default; the selected alternative agent's CLI otherwise
+- A non-root `agent` user
 
 When customizing the Dockerfile, ensure you keep:
 
-- A non-root user (the default `agent` user) for Claude to run as
+- A non-root user (the default `agent` user) for the selected agent
 - `git` (required for commits and branch operations)
 - `gh` (required for issue fetching)
-- Claude Code CLI installed and on PATH
+- The selected agent CLI installed and on PATH (Pi by default)
 
 Add your project-specific dependencies (e.g., language runtimes, build tools) to the Dockerfile as needed.
 

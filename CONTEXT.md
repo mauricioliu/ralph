@@ -43,7 +43,7 @@ _Avoid_: "local provider", "none provider", "host provider"
 ### Branching
 
 **Branch strategy**:
-Configuration on a **sandbox provider** that controls how the agent's changes relate to branches, set at provider construction time.
+Configuration on a run or **worktree** that controls how the **agent**'s changes relate to branches. Independent of **session fork**.
 _Avoid_: "worktree mode" (old name), "branch mode"
 
 **Head (branch strategy)**:
@@ -207,7 +207,7 @@ Continuing an **agent session** by appending new turns to the same session recor
 _Avoid_: "continue", "follow-up"
 
 **Session fork**:
-Branching an **agent session** into a new record with a new session ID, leaving the parent record byte-for-byte unchanged. Uses the **agent**'s native fork flag (`claude --fork-session`, `codex exec fork`). Exposed as `RunResult.fork()`. Isolates the session only -- not the **source branch** or **sandbox**.
+Branching an **agent session** into a new record with a new session ID, leaving the parent record byte-for-byte unchanged. Uses the **agent**'s native fork flag (`claude --fork-session`, `codex exec fork`). Exposed as `RunResult.fork()`. Isolates the session only -- not the **source branch** or **sandbox**. Supported for Claude Code and Codex; Pi supports **session resume**, not **session fork**.
 _Avoid_: "branch" (overloaded with git branches), "copy session"
 
 ### Display
@@ -225,5 +225,5 @@ The display mode where Ralph renders an interactive UI in the terminal with spin
 _Avoid_: "stdout mode", "interactive mode", "CLI mode" (ambiguous with the CLI itself)
 
 **Agent stream event**:
-A single item in the **agent**'s output stream -- either a `text` chunk or a `toolCall` -- surfaced to the caller of `run()` so the stream can be forwarded to an external observability system. Available only in **log-to-file mode** via the `onAgentStreamEvent` callback on the `logging` option. Each event carries its `iteration` number and a `timestamp`.
+A single item in the **agent**'s output stream -- a `text` chunk, a `toolCall`, or a verbatim `raw` stdout line -- surfaced to the caller of `run()` so the stream can be forwarded to an external observability system. Available only in **log-to-file mode** via the `onAgentStreamEvent` callback on the `logging` option. Each event carries its `iteration` number and a `timestamp`.
 _Avoid_: "log event" (the log file contains more than just agent output), "display entry" (internal UI type)
