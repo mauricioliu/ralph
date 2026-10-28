@@ -240,6 +240,36 @@ export interface NoSandboxProvider {
   }) => Promise<NoSandboxHandle>;
 }
 
+/**
+ * Minimal, one-way capability for agent credential provisioning.
+ * Deliberately separate from session capture/resume (no sandbox→host copy).
+ */
+export interface CredentialSandboxHandle {
+  exec: BindMountSandboxHandle["exec"];
+  copyFile(hostPath: string, sandboxPath: string): Promise<void>;
+}
+
+/** Normalize provider-family copy methods without exposing reverse copy. */
+export const toCredentialHandle = (
+  handle: BindMountSandboxHandle | IsolatedSandboxHandle | NoSandboxHandle,
+): CredentialSandboxHandle | undefined => {
+  if (typeof handle.exec !== "function") return undefined;
+  if ("copyFileIn" in handle && typeof handle.copyFileIn === "function") {
+    return {
+      exec: (command, options) => handle.exec(command, options),
+      copyFile: (hostPath, sandboxPath) =>
+        handle.copyFileIn(hostPath, sandboxPath),
+    };
+  }
+  if ("copyIn" in handle && typeof handle.copyIn === "function") {
+    return {
+      exec: (command, options) => handle.exec(command, options),
+      copyFile: (hostPath, sandboxPath) => handle.copyIn(hostPath, sandboxPath),
+    };
+  }
+  return undefined;
+};
+
 // ---------- Branch strategy types ----------
 
 /** Head strategy: agent writes directly to host working directory. Bind-mount only. */

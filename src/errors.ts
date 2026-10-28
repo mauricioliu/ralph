@@ -20,6 +20,14 @@ export class CopyError extends Data.TaggedError("CopyError")<{
   readonly message: string;
 }> {}
 
+/** One-way host credential provisioning failed. Never includes raw provider output. */
+export class CredentialProvisionError extends Data.TaggedError(
+  "CredentialProvisionError",
+)<{
+  readonly message: string;
+  readonly hostPath?: string;
+}> {}
+
 /** Docker infrastructure operation failed */
 export class DockerError extends Data.TaggedError("DockerError")<{
   readonly message: string;
@@ -198,6 +206,7 @@ export type SandboxError =
   | ExecError
   | ExecHostError
   | CopyError
+  | CredentialProvisionError
   | DockerError
   | PodmanError
   | SyncError

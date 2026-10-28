@@ -52,6 +52,7 @@ export type {
   OutputStringDefinition,
 } from "./Output.js";
 export { CwdError } from "./CwdError.js";
+export { CredentialProvisionError } from "./CredentialProvisionError.js";
 export {
   claudeCode,
   codex,
@@ -82,6 +83,7 @@ export type {
   IsolatedSandboxProvider,
   NoSandboxProvider,
   BindMountSandboxHandle,
+  CredentialSandboxHandle,
   IsolatedSandboxHandle,
   NoSandboxHandle,
   InteractiveExecOptions,

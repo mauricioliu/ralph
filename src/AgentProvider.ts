@@ -20,7 +20,14 @@ import {
   transferPiSession,
   type HostSessionLookup,
 } from "./SessionStore.js";
-import type { BindMountSandboxHandle } from "./SandboxProvider.js";
+import type {
+  BindMountSandboxHandle,
+  CredentialSandboxHandle,
+} from "./SandboxProvider.js";
+import {
+  makePiCredentialProvisioner,
+  type PiCredentialOptions,
+} from "./PiCredentials.js";
 
 const fileExists = async (path: string): Promise<boolean> => {
   try {
@@ -271,6 +278,11 @@ export interface AgentProvider {
   readonly captureSessions: boolean;
   /** Provider-owned storage and transfer behavior for resumable agent sessions. */
   readonly sessionStorage?: AgentSessionStorage;
+  /** Opt in to one-way host→sandbox credentials, before each agent launch. */
+  provisionCredentials?(args: {
+    readonly handle: CredentialSandboxHandle;
+    readonly signal?: AbortSignal;
+  }): Promise<void>;
   buildPrintCommand(options: AgentCommandOptions): PrintCommand;
   buildInteractiveArgs?(options: AgentCommandOptions): string[];
   /** Use only parsed assistant output, never raw stdout, as the run result. */
@@ -657,6 +669,8 @@ export interface PiOptions {
   readonly env?: Record<string, string>;
   /** When false, session capture is disabled. Default: true. */
   readonly captureSessions?: boolean;
+  /** Override Pi credential directories. The sandbox override also sets PI_CODING_AGENT_DIR. */
+  readonly credentials?: PiCredentialOptions;
   /** Override pi session directories for tests or non-standard installs. */
   readonly sessionStorage?: {
     readonly hostSessionsDir?: string;
@@ -669,9 +683,20 @@ export const pi = (
   options?: PiOptions,
 ): AgentProvider & { readonly sessionStorage: AgentSessionStorage } => ({
   name: "pi",
-  env: options?.env ?? {},
+  env: {
+    ...options?.env,
+    ...(options?.credentials?.sandboxAgentDir
+      ? { PI_CODING_AGENT_DIR: options.credentials.sandboxAgentDir }
+      : {}),
+  },
   captureSessions: options?.captureSessions ?? true,
   sessionStorage: makePiSessionStorage(options),
+  provisionCredentials: makePiCredentialProvisioner({
+    ...options?.credentials,
+    sandboxAgentDir:
+      options?.credentials?.sandboxAgentDir ??
+      options?.env?.PI_CODING_AGENT_DIR,
+  }),
   parsedOutputOnly: true,
 
   buildPrintCommand({

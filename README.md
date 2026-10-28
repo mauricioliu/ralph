@@ -1000,6 +1000,66 @@ agent: pi("claude-sonnet-4-6", { thinking: "high" });
 | `env`             | `Record<string, string>`                                                 | `{}`    | Environment variables injected by this agent provider    |
 | `captureSessions` | `boolean`                                                                | `true`  | Capture pi session JSONL to host for `pi --session <id>` |
 
+### Pi sandbox credentials
+
+`pi()` opts into one-way credential provisioning. Before every agent launch,
+Ralph copies the host's `~/.pi/agent/auth.json` and, when present,
+`models-store.json` into the sandbox. This applies to `run()`,
+`interactive()`, `Worktree.run()/interactive()`, and
+`Sandbox.run()/interactive()` (including worktree-backed sandboxes).
+No-sandbox runs skip transfer because Pi already reads the host files.
+
+Authenticate with Pi **on the host** first. The host directory defaults to
+`PI_CODING_AGENT_DIR` when set, otherwise `~/.pi/agent`. The destination
+defaults to the sandbox agent user's discovered `$HOME/.pi/agent`, not a
+hardcoded user path. Non-standard installs can override both directories:
+
+```typescript
+const agent = pi("claude-sonnet-4-6", {
+  credentials: {
+    hostAgentDir: "/home/me/custom-pi",
+    sandboxAgentDir: "/home/agent/custom-pi",
+  },
+});
+```
+
+The sandbox override also sets Pi's `PI_CODING_AGENT_DIR` in provider env
+(and therefore applies to no-sandbox launches too). Alternatively set that
+variable in `PiOptions.env` to select the transfer destination. Session
+directory overrides remain independent under `sessionStorage`; changing
+credential directories does not change Ralph's session capture/resume paths.
+
+Ralph creates and verifies private destination/staging directories (`0700`)
+and credential files (`0600`). Providers need shell exec, `stat -c %a`,
+`chmod`, and host→sandbox copy. If a runtime's copy creates root-owned files,
+its existing `exec(..., { sudo: true })` capability must support ownership
+repair. Missing auth/copy capabilities, failed commands/copies or failed
+permission checks stop the launch with `CredentialProvisionError` (exported
+from the package); transport output and credential contents are not included
+in that error.
+
+**The host is authoritative.** Sandbox token refreshes are never copied back.
+Each subsequent call re-copies current host credentials, even on a warm
+sandbox; a catalog removed on the host is removed from the sandbox too.
+Failed/aborted transfers clean their private staging files before returning.
+Cancellation waits for an in-flight copy to settle before cleanup, rather
+than leaving a background write racing the next call. A reusable handle stays
+open after transfer failure/abort for retry; if cleanup itself fails, close
+the sandbox before retrying. Do not bind-mount the host credential directory
+writable into the sandbox: use the one-way transfer instead.
+
+Custom agent providers opt in through optional
+`AgentProvider.provisionCredentials({ handle, signal })`. Its
+`CredentialSandboxHandle` exposes only `exec` and host→sandbox `copyFile`;
+it is intentionally separate from the bind-mount session capture/resume
+handle, which retains its upstream behavior. Providers without this hook
+are unchanged.
+
+Automated coverage uses synthetic credentials and mock agent launches only.
+A real authenticated Pi run inside a real sandbox, including provider OAuth
+refresh behavior, is a separate manual validation; it is not exercised by
+the test suite.
+
 ### Provider `env`
 
 Both **agent providers** and **sandbox providers** accept an optional `env: Record<string, string>` in their options. These environment variables are merged with the `.ralph/.env` resolver output at launch time:

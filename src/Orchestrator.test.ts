@@ -137,6 +137,7 @@ const makeTestSandboxFactory = (
             {
               hostWorktreePath: sandboxBaseDir,
               sandboxRepoPath: sandboxBaseDir,
+              sandboxTag: "none", // Host-only synthetic runner.
               applyToHost: () => Effect.void,
             },
             buildSandbox(sandboxBaseDir),
@@ -749,6 +750,7 @@ describe("OrchestrateResult", () => {
               {
                 hostWorktreePath: sandboxBaseDir,
                 sandboxRepoPath: sandboxBaseDir,
+                sandboxTag: "none", // Host-only synthetic runner.
                 applyToHost: () => Effect.void,
               },
               makeMockAgentLayer(sandboxBaseDir, async (repoDir) => {
@@ -3531,6 +3533,7 @@ describe("Session capture integration", () => {
                 sandboxRepoPath: sandboxBaseDir,
                 applyToHost: () => Effect.void,
                 bindMountHandle: handle,
+                sandboxTag: "none", // Session-only mock; no credential sandbox.
               },
               sandbox,
             ) as Effect.Effect<A, E | DockerError, R>;
@@ -3883,6 +3886,7 @@ describe("Session capture integration", () => {
                 sandboxRepoPath: sandboxBaseDir,
                 applyToHost: () => Effect.void,
                 bindMountHandle: handle,
+                sandboxTag: "none", // Session-only mock; no credential sandbox.
               },
               sandbox,
             ) as Effect.Effect<A, E | DockerError, R>;

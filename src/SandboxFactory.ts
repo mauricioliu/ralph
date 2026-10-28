@@ -21,9 +21,11 @@ import type {
   BranchStrategy,
   BindMountSandboxProvider,
   BindMountSandboxHandle,
+  CredentialSandboxHandle,
   IsolatedSandboxHandle,
   NoSandboxHandle,
 } from "./SandboxProvider.js";
+import { toCredentialHandle } from "./SandboxProvider.js";
 import { runHostHooks, type SandboxHooks } from "./SandboxLifecycle.js";
 import { startSandbox } from "./startSandbox.js";
 import { syncOut } from "./syncOut.js";
@@ -142,6 +144,8 @@ export interface SandboxInfo {
   readonly applyToHost?: () => Effect.Effect<void, SyncError>;
   /** The bind-mount sandbox handle, available when the provider is a bind-mount provider. Used for session capture. */
   readonly bindMountHandle?: BindMountSandboxHandle;
+  readonly sandboxTag: SandboxProvider["tag"];
+  readonly credentialHandle?: CredentialSandboxHandle;
 }
 
 export interface WithSandboxResult<A> {
@@ -367,6 +371,7 @@ export const WorktreeDockerSandboxFactory = {
                         {
                           hostWorktreePath: hostRepoDir,
                           sandboxRepoPath: worktreePath,
+                          sandboxTag: "none",
                         },
                         sandbox,
                       ) as Effect.Effect<A, E | SandboxError, R>,
@@ -426,6 +431,7 @@ export const WorktreeDockerSandboxFactory = {
                           {
                             hostWorktreePath: worktreeInfo.path,
                             sandboxRepoPath: worktreePath,
+                            sandboxTag: "none",
                           },
                           sandbox,
                         ),
@@ -487,6 +493,8 @@ export const WorktreeDockerSandboxFactory = {
                           {
                             hostWorktreePath: worktreeInfo.path,
                             sandboxRepoPath: worktreePath,
+                            sandboxTag: "isolated",
+                            credentialHandle: toCredentialHandle(handle),
                             applyToHost: () =>
                               syncOut(
                                 worktreeInfo.path,
@@ -563,6 +571,8 @@ export const WorktreeDockerSandboxFactory = {
                         hostWorktreePath: hostRepoDir,
                         sandboxRepoPath: worktreePath,
                         bindMountHandle: handle as BindMountSandboxHandle,
+                        sandboxTag: "bind-mount",
+                        credentialHandle: toCredentialHandle(handle),
                       },
                       sandbox,
                     ) as Effect.Effect<A, E | SandboxError, R>,
@@ -655,6 +665,8 @@ export const WorktreeDockerSandboxFactory = {
                           hostWorktreePath: worktreeInfo.path,
                           sandboxRepoPath: worktreePath,
                           bindMountHandle: handle as BindMountSandboxHandle,
+                          sandboxTag: "bind-mount",
+                          credentialHandle: toCredentialHandle(handle),
                         },
                         sandbox,
                       ),

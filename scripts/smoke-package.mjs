@@ -135,6 +135,7 @@ try {
     "createSandbox",
     "createWorktree",
     "CwdError",
+    "CredentialProvisionError",
     "StructuredOutputError",
     "claudeCode",
     "codex",
@@ -172,7 +173,22 @@ try {
     "parallel-planner",
     "parallel-planner-with-review",
   ];
-  const mains = [];
+  const publicApiFixture = join(fixture, "credentials.ts");
+  await writeFile(
+    publicApiFixture,
+    `
+    import { CredentialProvisionError, pi, type CredentialSandboxHandle, type AgentProvider } from '@mauricioliu/ralph';
+    const error: Error = new CredentialProvisionError({ message: 'synthetic', hostPath: '/fixture/auth.json' });
+    const agent: AgentProvider = pi('fixture', {
+      credentials: { hostAgentDir: '/fixture/host', sandboxAgentDir: '/fixture/sandbox' },
+    });
+    async function provision(handle: CredentialSandboxHandle, signal: AbortSignal) {
+      await agent.provisionCredentials?.({ handle, signal });
+    }
+    void error; void provision;
+  `,
+  );
+  const mains = [publicApiFixture];
   for (const type of ["module", "commonjs"]) {
     for (const [i, template] of templates.entries()) {
       const cwd = join(fixture, `${template}-${type}`);
@@ -252,7 +268,7 @@ try {
     }),
   );
   console.log(
-    `PASS @mauricioliu/ralph@${pkg.version}: offline tarball installation, CLI, all public imports, 10 compiled scaffolds; no agent/provider execution.`,
+    `PASS @mauricioliu/ralph@${pkg.version}: offline tarball installation, CLI, all public imports, credential API types, 10 compiled scaffolds; no agent/provider execution.`,
   );
 } finally {
   await rm(temp, { recursive: true, force: true });

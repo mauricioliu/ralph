@@ -41,6 +41,8 @@ import {
 } from "./PromptArgumentSubstitution.js";
 import { noSandbox } from "./sandboxes/no-sandbox.js";
 import { raceAbortSignal } from "./raceAbortSignal.js";
+import { provisionAgentCredentialsEffect } from "./CredentialProvision.js";
+import { toCredentialHandle } from "./SandboxProvider.js";
 import { resolveCwd } from "./resolveCwd.js";
 import type { Timeouts } from "./run.js";
 
@@ -358,6 +360,13 @@ export const interactive = async (
         );
       }
       const interactiveExecFn = handle.interactiveExec.bind(handle);
+
+      yield* provisionAgentCredentialsEffect({
+        provider,
+        sandboxTag: sandboxProvider.tag,
+        credentialHandle: toCredentialHandle(handle),
+        signal: options.signal,
+      });
 
       // Build sandbox service and run withSandboxLifecycle
       const sandbox = makeSandboxFromHandle(handle);

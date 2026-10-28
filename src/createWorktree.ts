@@ -55,6 +55,8 @@ import {
   BUILT_IN_PROMPT_ARG_KEYS,
 } from "./PromptArgumentSubstitution.js";
 import { noSandbox } from "./sandboxes/no-sandbox.js";
+import { provisionAgentCredentialsEffect } from "./CredentialProvision.js";
+import { toCredentialHandle } from "./SandboxProvider.js";
 import { raceAbortSignal } from "./raceAbortSignal.js";
 import type { Timeouts } from "./run.js";
 
@@ -395,6 +397,12 @@ export const createWorktree = async (
           );
         }
         const interactiveExecFn = handle.interactiveExec.bind(handle);
+        yield* provisionAgentCredentialsEffect({
+          provider,
+          sandboxTag: resolvedSandbox.tag,
+          credentialHandle: toCredentialHandle(handle),
+          signal: opts.signal,
+        });
         const sandbox = makeSandboxFromHandle(handle);
         const worktreePath = handle.worktreePath;
 
@@ -643,6 +651,8 @@ export const createWorktree = async (
               sandboxRepoPath: sandboxRepoDir,
               applyToHost,
               bindMountHandle,
+              sandboxTag: sandboxProvider.tag,
+              credentialHandle: toCredentialHandle(handle),
             },
             sandbox,
           ).pipe(

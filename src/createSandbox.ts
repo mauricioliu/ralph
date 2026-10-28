@@ -58,6 +58,8 @@ import { copyToWorktree } from "./CopyToWorktree.js";
 import { resolveCwd } from "./resolveCwd.js";
 import { patchGitMountsForWindows } from "./mountUtils.js";
 import { assertResumeSessionExists } from "./resumePrecheck.js";
+import { provisionAgentCredentialsEffect } from "./CredentialProvision.js";
+import { toCredentialHandle } from "./SandboxProvider.js";
 import { registerShutdown } from "./shutdownRegistry.js";
 
 export interface CreateSandboxOptions {
@@ -286,6 +288,8 @@ interface SandboxHandleContext {
   readonly bindMountHandle: BindMountSandboxHandle | undefined;
   /** Provider tag, used by resumeSession to dispatch the host-side session lookup. */
   readonly providerTag: SandboxProvider["tag"];
+  /** Test overrides run on the host; keep their session handle separate. */
+  readonly credentialSandboxTag: SandboxProvider["tag"];
   readonly applyToHost: () => Effect.Effect<void, any>;
   readonly timeouts?: Timeouts;
   /** Worktree branch strategy. Set only when the handle is backed by a
@@ -436,6 +440,10 @@ const buildSandboxHandle = (
               sandboxRepoPath: sandboxRepoDir,
               applyToHost,
               bindMountHandle,
+              sandboxTag: ctx.credentialSandboxTag,
+              credentialHandle: providerHandle
+                ? toCredentialHandle(providerHandle)
+                : undefined,
             },
             sandbox,
           ).pipe(
@@ -578,6 +586,12 @@ const buildSandboxHandle = (
       try {
         lifecycleResult = await Effect.runPromise(
           Effect.gen(function* () {
+            yield* provisionAgentCredentialsEffect({
+              provider,
+              sandboxTag: ctx.credentialSandboxTag,
+              credentialHandle: toCredentialHandle(providerHandle),
+              signal: interactiveOptions.signal,
+            });
             const resolved = yield* resolvePrompt({ prompt, promptFile });
             const rawPrompt = resolved.text;
             const isInlinePrompt = resolved.source === "inline";
@@ -885,6 +899,7 @@ export const createSandboxFromWorktree = async (
       providerHandle,
       bindMountHandle,
       providerTag: options.sandbox.tag,
+      credentialSandboxTag: isTestMode ? "none" : options.sandbox.tag,
       applyToHost,
       timeouts: options.timeouts,
       branchStrategy: options.branchStrategy,
@@ -1127,6 +1142,7 @@ export const createSandbox = async (
       providerHandle,
       bindMountHandle,
       providerTag: options.sandbox.tag,
+      credentialSandboxTag: isTestMode ? "none" : options.sandbox.tag,
       applyToHost,
       timeouts: options.timeouts,
     },

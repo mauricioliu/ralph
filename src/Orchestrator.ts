@@ -13,6 +13,7 @@ import { SandboxFactory, SANDBOX_REPO_DIR } from "./SandboxFactory.js";
 import { withSandboxLifecycle, type SandboxHooks } from "./SandboxLifecycle.js";
 import type { AgentProvider, IterationUsage } from "./AgentProvider.js";
 import type { Timeouts } from "./run.js";
+import { provisionAgentCredentialsEffect } from "./CredentialProvision.js";
 import { TextDeltaBuffer } from "./TextDeltaBuffer.js";
 
 export type { ParsedStreamEvent, IterationUsage } from "./AgentProvider.js";
@@ -401,7 +402,14 @@ export const orchestrate = (
 
       const sandboxResult = yield* factory.withSandbox(
         (
-          { hostWorktreePath, sandboxRepoPath, applyToHost, bindMountHandle },
+          {
+            hostWorktreePath,
+            sandboxRepoPath,
+            applyToHost,
+            bindMountHandle,
+            sandboxTag,
+            credentialHandle,
+          },
           sandbox,
         ) =>
           withSandboxLifecycle(
@@ -419,6 +427,13 @@ export const orchestrate = (
             sandbox,
             (ctx) =>
               Effect.gen(function* () {
+                yield* provisionAgentCredentialsEffect({
+                  provider,
+                  sandboxTag,
+                  credentialHandle,
+                  signal: options.signal,
+                });
+
                 // Resume session: transfer JSONL from host to sandbox before iteration 1
                 const iterationResumeSession =
                   i === 1 ? options.resumeSession : undefined;
