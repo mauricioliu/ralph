@@ -14,6 +14,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Effect, Either } from "effect";
+import { FileSystem } from "@effect/platform";
+import { SystemError } from "@effect/platform/Error";
+import { provisionPiCredentialsEffect } from "./PiCredentials.js";
 import { pi } from "./AgentProvider.js";
 import {
   toCredentialHandle,
@@ -41,7 +45,8 @@ describe("Pi one-way credentials (synthetic files, local shell only)", () => {
     await writeFile(join(host, "auth.json"), AUTH, { mode: 0o644 });
     const guard = toCredentialHandle({
       worktreePath: join(root, "worktree"),
-      exec: (command, options) => handle.exec(command, options),
+      exec: (...args: Parameters<CredentialSandboxHandle["exec"]>) =>
+        handle.exec(...args),
       copyIn: copyFile,
       copyFileOut: async () => {},
       close: async () => {},
@@ -148,6 +153,60 @@ describe("Pi one-way credentials (synthetic files, local shell only)", () => {
       _tag: "CredentialProvisionError",
     });
     expect(handle.copyFile).not.toHaveBeenCalled();
+  });
+
+  it("runs the credential program against an injected filesystem without reading host auth", async () => {
+    const fs = FileSystem.makeNoop({
+      access: () =>
+        Effect.fail(
+          new SystemError({
+            reason: "PermissionDenied",
+            module: "FileSystem",
+            method: "access",
+            pathOrDescriptor: "synthetic",
+          }),
+        ),
+    });
+    const outcome = await Effect.runPromise(
+      provisionPiCredentialsEffect(
+        { hostAgentDir: "/synthetic-only" },
+        { handle },
+      ).pipe(Effect.provideService(FileSystem.FileSystem, fs), Effect.either),
+    );
+    expect(Either.isLeft(outcome) && outcome.left).toMatchObject({
+      _tag: "CredentialProvisionError",
+      hostPath: "/synthetic-only/auth.json",
+    });
+    expect(handle.exec).not.toHaveBeenCalled();
+  });
+
+  it("observes cancellation after an injected filesystem failure settles", async () => {
+    const ac = new AbortController();
+    const fs = FileSystem.makeNoop({
+      access: () =>
+        Effect.sync(() => ac.abort("fixture-stop")).pipe(
+          Effect.zipRight(
+            Effect.fail(
+              new SystemError({
+                reason: "PermissionDenied",
+                module: "FileSystem",
+                method: "access",
+                pathOrDescriptor: "synthetic",
+              }),
+            ),
+          ),
+        ),
+    });
+    const outcome = await Effect.runPromise(
+      provisionPiCredentialsEffect(
+        { hostAgentDir: "/synthetic-only" },
+        { handle, signal: ac.signal },
+      ).pipe(Effect.provideService(FileSystem.FileSystem, fs), Effect.either),
+    );
+    expect(Either.isLeft(outcome) && outcome.left).toMatchObject({
+      _tag: "CredentialCancelled",
+    });
+    expect(handle.exec).not.toHaveBeenCalled();
   });
 
   it("requires readable host auth before any sandbox operation", async () => {
@@ -291,6 +350,24 @@ describe("Pi one-way credentials (synthetic files, local shell only)", () => {
       code: "ENOENT",
     });
     expect(await readFile(join(host, "auth.json"), "utf8")).toBe(AUTH);
+  });
+
+  it("removes partially installed auth when catalog installation fails, then permits reuse", async () => {
+    await writeFile(join(host, "models-store.json"), CATALOG);
+    const execute = handle.exec;
+    handle.exec = vi.fn(async (command, options) =>
+      command.includes("mv -f") && command.includes("models-store.json")
+        ? { exitCode: 1, stdout: AUTH, stderr: AUTH }
+        : execute(command, options),
+    );
+    await expect(provision()).rejects.toMatchObject({
+      _tag: "CredentialProvisionError",
+      message: expect.not.stringContaining("fixture-only-token"),
+    });
+    expect(await readdir(dest)).toEqual([]);
+    handle.exec = execute;
+    await provision();
+    expect(await readFile(join(dest, "auth.json"), "utf8")).toBe(AUTH);
   });
 
   it("rejects a symlink agent directory without changing its target", async () => {
