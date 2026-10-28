@@ -319,7 +319,11 @@ describe("credentials across all agent entry points (no agent or container proce
         ...provider,
         captureSessions: true,
         provisionCredentials: async (args) => {
-          expect(Object.keys(args.handle).sort()).toEqual(["copyFile", "exec"]);
+          expect(Object.keys(args.handle).sort()).toEqual([
+            "copyFile",
+            "exec",
+            "validateDirectory",
+          ]);
           await provision(args);
         },
         sessionStorage: {

@@ -1051,14 +1051,16 @@ overrides are applied to every launch (using POSIX `env`), including reusable
 sandboxes created before the agent was selected. Daytona forwards launch env
 through the SDK's `envVars`, overriding conflicting template env keys. Its synced
 repository lives in `ralph-workspace/` beneath the SDK work directory, not HOME
-itself. Credential copies targeting the sandbox worktree are rejected to prevent
+itself; this child is initialized before the handle is returned. Credential
+directories are checked against the physical worktree before writes or mode
+changes. Symlink ancestors and unverifiable paths are rejected to prevent
 secrets entering sync artifacts; keep overrides outside the repository. Session
 directory overrides remain independent under `sessionStorage`; changing
 credential directories does not change Ralph's session capture/resume paths.
 
 Ralph creates and verifies private destination/staging directories (`0700`)
 and credential files (`0600`). Providers need shell exec, `stat -c %a`,
-`chmod`, and host→sandbox copy. If a runtime's copy creates root-owned files,
+`chmod`, GNU-compatible `realpath -e/-m`, and host→sandbox copy. If a runtime's copy creates root-owned files,
 its existing `exec(..., { sudo: true })` capability must support ownership
 repair. Missing auth/copy capabilities, failed commands/copies or failed
 permission checks stop the launch with `CredentialProvisionError` (exported
@@ -1077,7 +1079,8 @@ writable into the sandbox: use the one-way transfer instead.
 
 Custom agent providers opt in through optional
 `AgentProvider.provisionCredentials({ handle, signal })`. Its
-`CredentialSandboxHandle` exposes only `exec` and host→sandbox `copyFile`;
+`CredentialSandboxHandle` exposes `exec`, host→sandbox `copyFile`, and
+`validateDirectory` (required before directory writes or mode changes);
 it is intentionally separate from the bind-mount session capture/resume
 handle, which retains its upstream behavior. Providers without this hook
 are unchanged.

@@ -93,6 +93,8 @@ export const makePiCredentialProvisioner =
         throw new Error("invalid sandbox agent directory");
       }
       dir = posix.resolve(dir);
+      step = "validate physical sandbox credential directory";
+      await handle.validateDirectory(dir);
       step =
         "create private sandbox agent directory (requires writable access and stat/chmod)";
       await checkedExec(

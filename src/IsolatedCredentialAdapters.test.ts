@@ -110,7 +110,11 @@ describe.each(["vercel", "daytona"] as const)(
           runCommand: vi.fn(async (opts) => {
             expect(opts.cmd).toBe("sh");
             expect(opts.args[0]).toBe("-c");
-            const r = await command(opts.args[1], opts.sudo ?? false);
+            // Map the SDK's virtual filesystem root into this fixture only.
+            const r = await command(
+              opts.args[1].replaceAll("/vercel/sandbox/workspace", workspace),
+              opts.sudo ?? false,
+            );
             return {
               exitCode: r.exitCode,
               stdout: async () => r.stdout,

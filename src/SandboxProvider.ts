@@ -250,6 +250,8 @@ export interface NoSandboxProvider {
 export interface CredentialSandboxHandle {
   /** Use the same user and HOME as agent execution; sudo is only for explicit repair. */
   exec: BindMountSandboxHandle["exec"];
+  /** Verify a physical directory is outside the worktree, with no symlink ancestors, before any writes or mode changes. */
+  validateDirectory(sandboxPath: string): Promise<void>;
   /** Resolve only after the one-way file copy has settled, including on failure. */
   copyFile(hostPath: string, sandboxPath: string): Promise<void>;
 }
@@ -273,11 +275,45 @@ export const toCredentialHandle = (
       });
     }
   };
+  const validateDirectory = async (sandboxPath: string): Promise<void> => {
+    checkDestination(sandboxPath);
+    const quote = (s: string): string => "'" + s.replace(/'/g, "'\\''") + "'";
+    try {
+      if (!posix.isAbsolute(sandboxPath) || /[\r\n\0]/.test(sandboxPath))
+        throw new Error("invalid path");
+      // No writes here. Walk even missing ancestors, rejecting symlinks and
+      // inaccessible existing directories. realpath must be available and succeed.
+      const result = await handle.exec(`set -e
+p=${quote(posix.resolve(sandboxPath))}
+while :; do
+  test ! -L "$p"
+  if test -e "$p"; then
+    test -d "$p"
+    test -x "$p"
+  fi
+  test "$p" != / || break
+  p=$(dirname -- "$p")
+done
+worktree=$(realpath -e -- ${quote(handle.worktreePath)})
+test -d "$worktree"
+destination=$(realpath -m -- ${quote(sandboxPath)})
+case "$destination" in "$worktree"|"$worktree"/*) exit 1;; esac`);
+      if (result.exitCode === 0) return;
+    } catch {
+      /* Transport output is deliberately discarded. */
+    }
+    throw new CredentialProvisionError({
+      message:
+        "Cannot verify credential directory outside the physical sandbox worktree without symlink ancestors. Check realpath/directory access or set credentials.sandboxAgentDir outside the worktree.",
+    });
+  };
   if ("copyFileIn" in handle && typeof handle.copyFileIn === "function") {
     return {
       exec: (command, options) => handle.exec(command, options),
+      validateDirectory,
       copyFile: async (hostPath, sandboxPath) => {
         checkDestination(sandboxPath);
+        await validateDirectory(posix.dirname(sandboxPath));
         await handle.copyFileIn(hostPath, sandboxPath);
       },
     };
@@ -285,8 +321,10 @@ export const toCredentialHandle = (
   if ("copyIn" in handle && typeof handle.copyIn === "function") {
     return {
       exec: (command, options) => handle.exec(command, options),
+      validateDirectory,
       copyFile: async (hostPath, sandboxPath) => {
         checkDestination(sandboxPath);
+        await validateDirectory(posix.dirname(sandboxPath));
         await handle.copyIn(hostPath, sandboxPath);
       },
     };

@@ -15,7 +15,10 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { pi } from "./AgentProvider.js";
-import type { CredentialSandboxHandle } from "./SandboxProvider.js";
+import {
+  toCredentialHandle,
+  type CredentialSandboxHandle,
+} from "./SandboxProvider.js";
 
 const exec = promisify(execFile);
 const AUTH = '{"synthetic":{"type":"oauth","access":"fixture-only-token"}}';
@@ -34,8 +37,17 @@ describe("Pi one-way credentials (synthetic files, local shell only)", () => {
     dest = join(home, ".pi", "agent");
     await mkdir(host);
     await mkdir(home);
+    await mkdir(join(root, "worktree"));
     await writeFile(join(host, "auth.json"), AUTH, { mode: 0o644 });
+    const guard = toCredentialHandle({
+      worktreePath: join(root, "worktree"),
+      exec: (command, options) => handle.exec(command, options),
+      copyIn: copyFile,
+      copyFileOut: async () => {},
+      close: async () => {},
+    })!;
     handle = {
+      validateDirectory: guard.validateDirectory,
       exec: vi.fn(async (command) => {
         try {
           const result = await exec("sh", ["-c", command], {
@@ -289,6 +301,74 @@ describe("Pi one-way credentials (synthetic files, local shell only)", () => {
     });
     expect(await readFile(join(host, "auth.json"), "utf8")).toBe(AUTH);
     await expectPrivate(join(host, "auth.json"), 0o644);
+  });
+
+  it.each(["bind-mount", "isolated"] as const)(
+    "rejects %s ancestor aliases before copying or changing repository modes",
+    async (family) => {
+      const workspace = join(root, "worktree '$literal");
+      await mkdir(workspace, { mode: 0o755 });
+      const alias = join(home, ".pi");
+      await symlink(workspace, alias);
+      const raw = {
+        worktreePath: workspace,
+        exec: handle.exec,
+        copyFileOut: async () => {},
+        close: async () => {},
+        ...(family === "bind-mount"
+          ? { copyFileIn: handle.copyFile }
+          : { copyIn: handle.copyFile }),
+      };
+      handle = toCredentialHandle(
+        raw as import("./SandboxProvider.js").IsolatedSandboxHandle,
+      )!;
+      await expect(provision()).rejects.toMatchObject({
+        _tag: "CredentialProvisionError",
+      });
+      expect(await readdir(workspace)).toEqual([]);
+      await expectPrivate(workspace, 0o755);
+    },
+  );
+
+  it.each(["bind-mount", "isolated"] as const)(
+    "compares physical worktree paths for %s even when the worktree itself is aliased",
+    async (family) => {
+      const workspace = join(root, "actual worktree");
+      const alias = join(root, "worktree alias");
+      await mkdir(workspace, { mode: 0o755 });
+      await symlink(workspace, alias);
+      const raw = {
+        worktreePath: alias,
+        exec: handle.exec,
+        copyFileOut: async () => {},
+        close: async () => {},
+        ...(family === "bind-mount"
+          ? { copyFileIn: handle.copyFile }
+          : { copyIn: handle.copyFile }),
+      };
+      handle = toCredentialHandle(
+        raw as import("./SandboxProvider.js").IsolatedSandboxHandle,
+      )!;
+      await expect(provision(workspace)).rejects.toMatchObject({
+        _tag: "CredentialProvisionError",
+      });
+      await expectPrivate(workspace, 0o755);
+      expect(await readdir(workspace)).toEqual([]);
+    },
+  );
+
+  it("fails closed when the physical worktree cannot be verified", async () => {
+    handle = toCredentialHandle({
+      worktreePath: join(root, "missing worktree"),
+      exec: handle.exec,
+      copyIn: handle.copyFile,
+      copyFileOut: async () => {},
+      close: async () => {},
+    })!;
+    await expect(provision()).rejects.toMatchObject({
+      _tag: "CredentialProvisionError",
+    });
+    expect(await readdir(home)).toEqual([]);
   });
 
   it("replaces a destination file symlink, never writes through it", async () => {

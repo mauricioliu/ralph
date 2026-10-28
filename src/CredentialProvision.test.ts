@@ -29,11 +29,15 @@ describe("credential capability and policy", () => {
       const handle = toCredentialHandle(
         raw as unknown as BindMountSandboxHandle | IsolatedSandboxHandle,
       )!;
-      await handle.copyFile("host", "sandbox");
+      await handle.copyFile("host", "/outside/sandbox");
       await handle.exec("true");
-      expect(copy).toHaveBeenCalledWith("host", "sandbox");
+      expect(copy).toHaveBeenCalledWith("host", "/outside/sandbox");
       expect(raw.exec).toHaveBeenCalledWith("true", undefined);
-      expect(Object.keys(handle).sort()).toEqual(["copyFile", "exec"]);
+      expect(Object.keys(handle).sort()).toEqual([
+        "copyFile",
+        "exec",
+        "validateDirectory",
+      ]);
       expect(raw.copyFileOut).not.toHaveBeenCalled();
     }
   });
@@ -128,6 +132,7 @@ describe("credential capability and policy", () => {
         sandboxTag: "bind-mount",
         credentialHandle: {
           exec: async () => result,
+          validateDirectory: async () => {},
           copyFile: async () => {},
         },
       }),
@@ -152,6 +157,7 @@ describe("credential capability and policy", () => {
         sandboxTag: "isolated",
         credentialHandle: {
           exec: async () => result,
+          validateDirectory: async () => {},
           copyFile: async () => {},
         },
       }),
