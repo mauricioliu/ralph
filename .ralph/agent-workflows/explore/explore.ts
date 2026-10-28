@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import * as sandcastle from "@ai-hero/sandcastle";
-import { noSandbox } from "@ai-hero/sandcastle/sandboxes/no-sandbox";
+import * as ralph from "@mauricioliu/ralph";
+import { noSandbox } from "@mauricioliu/ralph/sandboxes/no-sandbox";
 import { claudeAgent, fail, required, writeJson } from "../shared/common";
 import { runWithExtraction } from "../shared/run-with-extraction";
 import { parseBatch, planSchema, renderIssues } from "./batch";
@@ -43,7 +43,7 @@ try {
       ISSUE_COUNT: String(batch.length),
       ISSUES: renderIssues(batch),
     },
-    output: sandcastle.Output.object({
+    output: ralph.Output.object({
       tag: "output",
       schema: planSchema(batch),
     }),

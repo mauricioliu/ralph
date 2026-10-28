@@ -2,7 +2,7 @@
  * Vercel isolated sandbox provider — wraps `@vercel/sandbox` into a SandboxProvider.
  *
  * Usage:
- *   import { vercel } from "sandcastle/sandboxes/vercel";
+ *   import { vercel } from "@mauricioliu/ralph/sandboxes/vercel";
  *   await run({ agent: claudeCode("claude-opus-4-8"), sandbox: vercel() });
  */
 
@@ -26,7 +26,7 @@ const VERCEL_REPO_PATH = "/vercel/sandbox/workspace";
  * Options for creating a Vercel sandbox provider.
  *
  * All `@vercel/sandbox` `Sandbox.create()` options are accepted as pass-through,
- * plus Sandcastle-specific options for auth and branch strategy.
+ * plus Ralph-specific options for auth and branch strategy.
  */
 export interface VercelOptions {
   /**
@@ -156,7 +156,7 @@ export const vercel = (options?: VercelOptions): IsolatedSandboxProvider =>
       const timeoutValue = options?.timeout ?? options?.timeoutMs;
       if (timeoutValue !== undefined) createParams.timeout = timeoutValue;
 
-      // Merge provider env with Sandcastle env
+      // Merge provider env with Ralph env
       createParams.env = createOptions.env;
 
       // Auth: pass token and team/project IDs if provided
@@ -255,14 +255,11 @@ export const vercel = (options?: VercelOptions): IsolatedSandboxProvider =>
         ): Promise<void> => {
           const info = await stat(hostPath);
           if (info.isDirectory()) {
-            const tarPath = join(
-              tmpdir(),
-              `sandcastle-copyin-${Date.now()}.tar.gz`,
-            );
+            const tarPath = join(tmpdir(), `ralph-copyin-${Date.now()}.tar.gz`);
             execSync(`tar -czf "${tarPath}" -C "${hostPath}" .`);
             try {
               const tarContent = await readFile(tarPath);
-              const sandboxTarPath = `/tmp/sandcastle-copyin-${Date.now()}.tar.gz`;
+              const sandboxTarPath = `/tmp/ralph-copyin-${Date.now()}.tar.gz`;
               await sandbox.writeFiles([
                 { path: sandboxTarPath, content: tarContent },
               ]);

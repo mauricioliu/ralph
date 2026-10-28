@@ -90,7 +90,7 @@ export const syncIn = (
 
     // Create git bundle on host capturing all refs
     const bundleDir = yield* Effect.tryPromise({
-      try: () => mkdtemp(join(tmpdir(), "sandcastle-bundle-")),
+      try: () => mkdtemp(join(tmpdir(), "ralph-bundle-")),
       catch: (e) =>
         new SyncError({
           message: `Failed to create temp dir: ${e instanceof Error ? e.message : String(e)}`,
@@ -106,10 +106,7 @@ export const syncIn = (
         );
 
         // Create temp dir in sandbox and copy bundle in
-        const mkTempResult = yield* execOk(
-          handle,
-          "mktemp -d -t sandcastle-XXXXXX",
-        );
+        const mkTempResult = yield* execOk(handle, "mktemp -d -t ralph-XXXXXX");
         const sandboxTmpDir = mkTempResult.stdout.trim();
         const bundleSandboxPath = `${sandboxTmpDir}/repo.bundle`;
 

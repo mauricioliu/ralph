@@ -14,7 +14,7 @@ Ground your assessment in:
 
 - `CONTEXT.md`
 - `docs/adr/` if relevant
-- `.sandcastle/CODING_STANDARDS.md`
+- `.ralph/CODING_STANDARDS.md`
 
 # 1. GROUP
 
