@@ -12,7 +12,7 @@ const doubles = vi.hoisted(() => ({
   execSync: vi.fn(() => {
     throw new Error("Unexpected host command during init test");
   }),
-  execFile: vi.fn((..._args: unknown[]) => {
+  execFile: vi.fn((..._args: unknown[]): void => {
     throw new Error("Unexpected external executable during init test");
   }),
   otherProcess: vi.fn(() => {

@@ -33,18 +33,12 @@ const strings = (file: string, expression: string) =>
 
 describe("repository dogfood configuration (static, never execute runners)", () => {
   it("uses the documented Pi split for all four loop roles", () => {
-    expect(strings(".ralph/run.ts", "ralph.pi")).toEqual([
+    expect(strings(".ralph/workflow.ts", "ralph.pi")).toEqual([
       "openai-codex/gpt-6-astra:high",
       ...Array(3).fill("zai-coding-cn/glm-5.3:high"),
     ]);
-    const source = read(".ralph/run.ts");
-    expect(source).toContain("const { issues } = plan.output");
-    expect(source).toContain("maxRetries: 2");
-    expect(calls(".ralph/run.ts", "ralph.Output.object")).toHaveLength(1);
-    expect(source).not.toContain("plan.stdout.match");
-    // Preserve upstream branch/worktree and concurrency semantics.
-    expect(source).toContain("branch: issue.branch");
-    expect(source).toContain("Promise.allSettled(");
+    // Orchestration is exercised in workflow.test.ts through the real public
+    // APIs and inert process/provider boundaries, not variable/loop spelling.
   });
 
   it.each(["interactive", "podman", "vercel"])(
@@ -76,7 +70,7 @@ describe("repository dogfood configuration (static, never execute runners)", () 
     expect(read(".factory/implement-task.ts")).toContain('type: "branch"');
   });
 
-  it.each([".ralph/run.ts", ".factory/implement-task.ts"])(
+  it.each([".factory/implement-task.ts"])(
     "%s supplies every prompt argument required for implementation and review",
     (file) => {
       const args = [...calls(file, "sandbox.run")];

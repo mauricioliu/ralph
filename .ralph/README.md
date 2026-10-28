@@ -65,7 +65,16 @@ upstream concurrency is retained, not expanded.
 
 After `npm ci`, run `npm run build`, `npm run typecheck`, `npm test` and
 `npm run test:package`. Typecheck now includes these configuration-owned scripts
-and tests; AST/static tests inspect entry points without importing/executing them.
+and tests. Static checks inspect deployable model/image configuration and security
+contracts without importing live entry points. `.ralph/run.ts` is the executable
+wrapper; `.ralph/workflow.ts` is an import-safe, repository-only callable boundary
+using the current source public API and a required sandbox transport/repository.
+Its behavior tests use the real Ralph APIs, temporary git repositories and
+synthetic credentials with an inert sandbox transport. Agent output, GitHub
+commands and install/build hooks are intercepted; no real agent, service or image
+build runs. Tests cover validated plan consumption/repair, issue-to-branch/prompt
+mapping, four concurrent branch lifetimes, failure/disposal settling, and ten-round
+planning/merging bounds without depending on local names or loop syntax.
 Credential tests use synthetic temporary fixtures only. The frozen security
 fixture records the verified #14 head (`d5bd042`): workflow bytes may differ only
 by the explicit Pi installation/auth-wrapper substitutions; extraction and apply
@@ -77,7 +86,7 @@ Likewise `test-podman`, `test-vercel` and `test-interactive` launch real agents;
 the cloud example also needs separately configured Vercel project/account IDs.
 Real image installation, model availability, login/refresh, inference, remote
 workflow execution and sandbox isolation need separate human authorization and
-validation. None is proven by static tests.
+validation. None is proven by the offline tests.
 
 `.factory/implement-task.ts` also selects Pi workers, but its external
 software-factory daemon is a legacy integration, not supplied or started here.
